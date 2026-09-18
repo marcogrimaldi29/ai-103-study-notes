@@ -1,0 +1,369 @@
+---
+import NoteLayout from '../../layouts/NoteLayout.astro';
+import Callout from '../../components/Callout.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import { href } from '../../lib/urls';
+
+const indexerPipeline = `
+flowchart LR
+  DS["Data source<br/>Blob · ADLS Gen2 · Cosmos DB<br/>Azure SQL · Table · OneLake"]
+  DS --> C1["1 · Document cracking<br/>open the file, extract<br/>text and images"]
+  C1 --> C2["2 · Field mappings<br/>source field → index field"]
+  C2 --> C3["3 · Skillset execution<br/>OCR · layout · chunk · embed<br/>enrich · custom skills"]
+  C3 --> C4["4 · Output field mappings<br/>enriched node → index field"]
+  C4 --> C5["5 · Push to index"]
+  C3 -.-> KS["Knowledge store<br/>(non-search scenarios)"]
+  C3 -.-> CACHE["Enrichment cache<br/>(reuse expensive OCR)"]
+`;
+
+const queryPipeline = `
+flowchart TB
+  Q["Query string"] --> A["Full-text search<br/>BM25 over the inverted index"]
+  Q --> B["Vector search<br/>HNSW / exhaustive KNN<br/>over embeddings"]
+  A --> RRF["Reciprocal Rank Fusion<br/>merges the two ranked lists"]
+  B --> RRF
+  RRF --> SEM["Semantic ranker (L2)<br/>Bing-derived models rerank,<br/>plus captions and answers"]
+  SEM --> TOP["Top-k grounding chunks"]
+  RRF -.->|"semantic ranking off"| TOP
+`;
+
+const chunkStrategy = `
+flowchart TD
+  D["Source document"] --> S{"Structure?"}
+  S -- "Long prose" --> T["Text Split skill<br/>sentences or pages,<br/>with overlap"]
+  S -- "Headings, tables,<br/>sections matter" --> L["Document Layout skill<br/>or Azure Content Understanding skill<br/>layout-aware chunking"]
+  S -- "Scanned / image-only" --> O["OCR first,<br/>then chunk"]
+  T --> E["Embedding skill"]
+  L --> E
+  O --> E
+  E --> I["Index: chunk text +<br/>vector + parent key + metadata"]
+`;
+
+const hybridQuery = `from azure.search.documents.models import VectorizableTextQuery
+
+# Hybrid + semantic: the benchmark-backed default for RAG grounding.
+# search_text drives BM25, vector_queries drives ANN, RRF merges them,
+# then the semantic ranker reorders the merged list.
+results = search_client.search(
+    search_text="what is the parental leave allowance for contractors",
+    vector_queries=[
+        VectorizableTextQuery(            # the index vectorizer embeds this for you
+            text="what is the parental leave allowance for contractors",
+            k_nearest_neighbors=50,
+            fields="content_vector",
+        )
+    ],
+    query_type="semantic",
+    semantic_configuration_name="default",
+    query_caption="extractive",
+    query_answer="extractive",
+    filter="department eq 'HR' and effective_date ge 2026-01-01",
+    select=["chunk_id", "title", "content", "url"],
+    top=5,
+)
+
+for r in results:
+    print(r["@search.reranker_score"], r["title"])`;
+
+const contentUnderstanding = `# An analyzer is a reusable definition: what to extract, how, and in what shape.
+analyzer = {
+    "baseAnalyzerId": "prebuilt-document",
+    "config": {
+        "enableOcr": True,
+        "enableLayout": True,               # tables, sections, reading order
+        "enableFigureDescription": True,    # describe charts and diagrams
+        "estimateFieldSourceAndConfidence": True,  # confidence + grounding
+        "tableFormat": "html",
+    },
+    "fieldSchema": {
+        "fields": {
+            "InvoiceNumber": {"type": "string", "method": "extract"},
+            "InvoiceDate":   {"type": "date",   "method": "extract"},
+            "VendorName":    {"type": "string", "method": "extract"},
+            "Total":         {"type": "number", "method": "extract"},
+            "Category": {
+                "type": "string",
+                "method": "classify",
+                "enum": ["goods", "services", "travel", "other"],
+            },
+            "RiskSummary": {
+                "type": "string",
+                "method": "generate",
+                "description": "One sentence on anything unusual about this invoice.",
+            },
+        }
+    },
+}`;
+---
+
+<NoteLayout
+  slug="skill-5-information-extraction"
+  description="AI-103 Skill 5 (10–15%): building retrieval and grounding pipelines in Azure AI Search — indexers, skillsets, enrichment, integrated vectorization, vector, hybrid and semantic search — and extracting content from documents with Content Understanding analyzers, OCR, layout analysis and markdown output."
+  intro="Where the grounding data comes from. Half of this skill is the Azure AI Search indexing and query pipeline; the other half is turning messy documents into clean, grounded representations an agent can actually reason over."
+>
+  <div class="card">
+    <strong>Two objectives in this skill area:</strong>
+    <ul style="margin-bottom:0">
+      <li><a href="#pipelines">5.1 Build retrieval and grounding pipelines</a> — ingest and index, semantic/hybrid/vector search, enrichment skills, RAG ingestion with OCR, connecting retrieval to agents</li>
+      <li><a href="#documents">5.2 Extract content from documents</a> — multimodal OCR + layout + field extraction, clean grounded representations, analyzers for structured or markdown output</li>
+    </ul>
+  </div>
+
+  <!-- ================================================================= -->
+  <h2 id="pipelines"><span class="num">5.1</span> Build retrieval and grounding pipelines</h2>
+
+  <h3 id="objects">The four Azure AI Search objects</h3>
+  <p>Every indexing question comes down to which of these four you change:</p>
+
+  <div class="table-wrap">
+    <table class="tbl t-orange">
+      <thead><tr><th>Object</th><th>Defines</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Data source</strong></td><td>Where the content lives and how to detect changes — Blob Storage, ADLS Gen2, Cosmos DB, Azure SQL, Table Storage, Microsoft OneLake</td></tr>
+        <tr><td><strong>Index</strong></td><td>The schema: fields, types, and per-field attributes (<em>searchable, filterable, sortable, facetable, retrievable, key</em>), vector fields and their profiles, semantic configuration, scoring profiles, analyzers</td></tr>
+        <tr><td><strong>Skillset</strong></td><td>The enrichment operations applied during indexing. At least one skill, <strong>maximum 30</strong>; three to five is typical. Supports chaining, looping and branching</td></tr>
+        <tr><td><strong>Indexer</strong></td><td>The driver that connects data source → skillset → index, on demand or on a schedule</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <Mermaid code={indexerPipeline} caption="The five indexer stages. Skillset execution is stage three — after document cracking and field mappings, before output field mappings." />
+
+  <h3 id="enrichment">Enrichment: built-in and custom skills</h3>
+  <p>
+    <strong>AI enrichment</strong> is image and natural-language processing inside the indexer pipeline, extracting text
+    and structure from content that could not otherwise be indexed. The skills the exam is most likely to name:
+  </p>
+
+  <div class="table-wrap">
+    <table class="tbl t-orange">
+      <thead><tr><th>Skill</th><th>Does</th><th>Reach for it when</th></tr></thead>
+      <tbody>
+        <tr><td><strong>OCR skill</strong></td><td>Extracts text from images and scanned pages</td><td>Scanned PDFs, photos of documents, text inside embedded images</td></tr>
+        <tr><td><strong>Image Analysis skill</strong></td><td>Tags, captions and visual features for images</td><td>Making image content searchable by description</td></tr>
+        <tr><td><strong>Text Split skill</strong></td><td>Chunks text into sentences or pages of a given length, with overlap. <strong>Free, all regions</strong></td><td>The default chunker for long prose</td></tr>
+        <tr><td><strong>Document Layout skill</strong></td><td>Document Intelligence layout: headings, tables, reading order — structure-aware chunking</td><td>Documents where sections and tables carry meaning</td></tr>
+        <tr><td><strong>Azure Content Understanding skill</strong></td><td>Semantic, <strong>layout-aware chunking that respects paragraph boundaries</strong></td><td>Better chunk quality than fixed-length splitting</td></tr>
+        <tr><td><strong>Azure OpenAI Embedding skill</strong></td><td>Generates vectors for chunks. Set <code>dimensions</code> to match your model</td><td>Any vector or hybrid index</td></tr>
+        <tr><td><strong>Azure Vision multimodal embeddings skill</strong> <span class="pill p-amber">preview</span></td><td>Embeds images into the same vector space as text</td><td>Searching images by text description</td></tr>
+        <tr><td><strong>AML skill</strong></td><td>Calls a model you deployed from the Foundry catalog</td><td>Using a catalog embedding model for integrated vectorization</td></tr>
+        <tr><td><strong>Entity Recognition, Key Phrase, Language Detection, Text Translation, PII Detection, Sentiment</strong></td><td>Azure Language capabilities applied during indexing</td><td>Filterable metadata: extract entities to facets, translate to one query language, redact before storage</td></tr>
+        <tr><td><strong>Shaper skill</strong></td><td>Reshapes enriched nodes into a complex structure</td><td>Preparing a projection for a knowledge store</td></tr>
+        <tr><td><strong>Custom Web API skill</strong></td><td>Calls <strong>your</strong> endpoint with the skill's input/output contract</td><td>Anything not covered by a built-in skill — a bespoke model, a lookup, business logic</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <Callout type="tip" title="Two skillset features worth remembering">
+    <p>
+      <strong>Enrichment caching</strong> <span class="pill p-amber">preview</span> reuses already-processed enrichments
+      across runs — valuable when your skillset includes OCR and image analysis, which are expensive. A
+      <strong>knowledge store</strong> persists enriched or generated content to Azure Storage as objects or tabular
+      rowsets, for <em>non-search</em> scenarios like knowledge mining and data science; it is defined in the skillset
+      but created in Storage.
+    </p>
+  </Callout>
+
+  <h3 id="chunking">Chunking and integrated vectorization</h3>
+  <Mermaid code={chunkStrategy} caption="Choose the chunker from the document's structure, not by habit. Chunk boundaries determine what the retriever can ever return." />
+
+  <p>
+    <strong>Integrated vectorization</strong> extends both pipelines so you never compute embeddings yourself:
+  </p>
+  <ul>
+    <li><strong>During indexing</strong> — a chunking skill plus an embedding skill in the skillset, with vectors routed to dedicated vector fields.</li>
+    <li><strong>At query time</strong> — a <strong>vectorizer</strong> defined in the index and attached to vector fields through a <strong>vector profile</strong>, so you can submit plain text and the service embeds it for you.</li>
+  </ul>
+
+  <Callout type="exam" title="Indexing skill vs query vectorizer">
+    <p>
+      These are two different objects and the exam does separate them. An <strong>embedding skill</strong> lives in the
+      <strong>skillset</strong> and vectorises content <em>during indexing</em>. A <strong>vectorizer</strong> lives in
+      the <strong>index</strong> and vectorises the query <em>at search time</em>. Use the <strong>same embedding
+      model</strong> for both — mismatched models put queries and documents in different vector spaces and retrieval
+      quality collapses. Vector conversion is one-way: there is no vector-to-text, which is why indexes keep both vector
+      and non-vector fields.
+    </p>
+  </Callout>
+
+  <h3 id="search-types">Vector, hybrid and semantic search</h3>
+  <Mermaid code={queryPipeline} caption="Full-text and vector run in parallel, RRF merges them, and the semantic ranker applies a second-stage reorder." />
+
+  <div class="table-wrap">
+    <table class="tbl t-orange">
+      <thead><tr><th>Type</th><th>Mechanism</th><th>Strength</th><th>Weakness</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Keyword / full-text</strong></td><td><strong>BM25</strong> over an inverted index</td><td>Exact matches: product codes, jargon, dates, names</td><td>Misses synonyms and paraphrase</td></tr>
+        <tr><td><strong>Vector</strong></td><td><strong>HNSW</strong> (approximate) or <strong>exhaustive KNN</strong>, scored by <code>cosine</code>, <code>euclidean</code> or <code>dotProduct</code></td><td>Conceptual similarity with no shared keywords; multilingual</td><td>Weak on exact identifiers; needs good chunking</td></tr>
+        <tr><td><strong>Hybrid</strong></td><td>Both in one request, merged by <strong>RRF</strong></td><td>Combines precision and recall — the sensible default</td><td>Scores are uniformly smaller than single-query scores</td></tr>
+        <tr><td><strong>Semantic ranking</strong></td><td><strong>L2 reranking</strong> with Bing-derived deep-learning models over the BM25- or RRF-ranked result set</td><td>Best relevance; adds <strong>captions</strong>, <strong>answers</strong> and optional <strong>query rewrite</strong></td><td>Applies to <strong>text only</strong>, and only to an initial result set</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <CodeBlock code={hybridQuery} lang="python" label="Python · hybrid + semantic query" />
+
+  <Callout type="exam" title="Search facts that get tested verbatim">
+    <ul style="margin-bottom:0">
+      <li><strong>RRF</strong> merges multiple ranked lists using the <em>inverse of each result's rank</em>. It fires whenever two or more queries run in parallel — hybrid, or several vector fields.</li>
+      <li><strong>Filters and semantic ranking apply to textual content only, not to vectors.</strong></li>
+      <li><code>vectorFilterMode</code> decides whether a filter runs <strong>before</strong> (<code>preFilter</code>) or <strong>after</strong> (<code>postFilter</code>) the vector search — a recall-versus-precision trade-off.</li>
+      <li>Azure OpenAI embedding models use <strong>cosine</strong> similarity; use cosine unless you have a reason not to.</li>
+      <li>Semantic ranker adds three things: <strong>L2 reranking</strong>, <strong>captions and answers</strong> in the response, and <strong>query rewrite</strong> (up to 10 variants) when enabled.</li>
+      <li><strong>Hybrid retrieval with the semantic ranker</strong> is the Microsoft-benchmarked best configuration for grounding — the safe answer to "how do we improve RAG relevance?".</li>
+    </ul>
+  </Callout>
+
+  <h3 id="agentic-retrieval">Agentic retrieval, knowledge sources and knowledge bases</h3>
+  <p>
+    <strong>Agentic retrieval</strong> is a multi-query pipeline for complex agent workflows. A
+    <strong>knowledge base</strong> represents a complete domain and consists of one or more
+    <strong>knowledge sources</strong>, an optional LLM for <strong>query planning and answer synthesis</strong>, and
+    retrieval parameters. Each request goes through planning, decomposition into focused subqueries, parallel retrieval,
+    semantic reranking and merging, returning a three-part response optimised for agent consumption.
+  </p>
+  <ul>
+    <li><strong>Indexed knowledge sources</strong> use the classic indexing and query engines; <strong>remote knowledge sources</strong> bypass indexing and are queried live.</li>
+    <li>Your agent references the knowledge base for <em>what</em> to ground on; the knowledge base decides <em>how</em> to ground.</li>
+    <li>Foundry surfaces this as <strong>Foundry IQ</strong> — a managed, permission-aware knowledge layer reusable across agents.</li>
+    <li>A <strong>query planner</strong> breaks conversational history into subqueries; the merged documents are the <strong>grounding data</strong> the model cites.</li>
+  </ul>
+
+  <h3 id="connecting">Connecting retrieval to agents and workflows</h3>
+  <div class="table-wrap">
+    <table class="tbl t-orange">
+      <thead><tr><th>Route</th><th>How</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Azure AI Search tool</strong></td><td>Connect the search service, attach the tool, point it at an index</td><td>Returns results with <strong>inline citations</strong>. Index needs searchable/retrievable <code>Edm.String</code> fields and searchable <code>Collection(Edm.Single)</code> vector fields</td></tr>
+        <tr><td><strong>Foundry IQ knowledge base</strong></td><td>Connect the knowledge base to the agent</td><td>Managed, multi-source, permission-aware</td></tr>
+        <tr><td><strong>File search tool</strong></td><td>Upload files, create a vector store</td><td>Foundry owns ingestion; reuse a persistent store in production</td></tr>
+        <tr><td><strong>Toolbox</strong></td><td>Put the retrieval tool in a toolbox</td><td>Reuse across agents, centralise credentials, versioning and policy</td></tr>
+        <tr><td><strong>Custom function or OpenAPI</strong></td><td>Wrap your own retrieval service</td><td>When retrieval has bespoke logic</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <Callout type="warn" title="Private networking changes the auth choice">
+    <p>
+      If the Azure AI Search tool must work over a <strong>private virtual network</strong>, the connection has to use
+      the <strong>Entra project managed identity</strong>. <strong>Key-based authentication is not supported with
+      private networking</strong> for that tool. This is a favourite detail in security-flavoured questions.
+    </p>
+  </Callout>
+
+  <!-- ================================================================= -->
+  <h2 id="documents"><span class="num">5.2</span> Extract content from documents</h2>
+
+  <h3 id="cu-pipeline">Content Understanding: the multimodal extraction pipeline</h3>
+  <p>
+    Content Understanding combines OCR, layout analysis and generative field extraction in one service, and returns
+    <strong>confidence scores</strong> and <strong>source grounding</strong> so a workflow can decide what to accept
+    automatically and what to send for review. Its stages:
+  </p>
+
+  <div class="table-wrap">
+    <table class="tbl t-orange">
+      <thead><tr><th>Stage</th><th>What happens</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Inputs</strong></td><td>Documents, images, audio or video</td></tr>
+        <tr><td><strong>Analyzer</strong></td><td>The reusable definition: extraction settings, field schema and model deployments. Prebuilt or custom</td></tr>
+        <tr><td><strong>Content extraction</strong></td><td><strong>OCR</strong>, selection marks, barcodes, formulas, and layout elements — paragraphs, sections, tables, reading order. For audio and video: transcription and key visual elements</td></tr>
+        <tr><td><strong>Segmentation</strong></td><td><code>enableSegment</code> splits a file into logical sections — by document type, or a video into scenes</td></tr>
+        <tr><td><strong>Field extraction</strong></td><td>Structured key-value pairs from your schema, via <strong>Extract</strong> (documents only), <strong>Classify</strong> or <strong>Generate</strong></td></tr>
+        <tr><td><strong>Confidence scores</strong></td><td>0–1 per field, enabling <strong>straight-through processing</strong>. Enabled with <code>estimateFieldSourceAndConfidence</code></td></tr>
+        <tr><td><strong>Grounding</strong></td><td>The region of the source each value came from, so a human can verify it in one click</td></tr>
+        <tr><td><strong>Output</strong></td><td><strong>Markdown</strong> for search and retrieval, or <strong>JSON</strong> matching your schema for automation and analytics</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <CodeBlock code={contentUnderstanding} lang="python" label="Python · analyzer definition (shape)" />
+
+  <h3 id="classification">Classification and splitting</h3>
+  <p>
+    A single API call can classify, split and extract. The supported document scenarios are worth memorising because
+    they map directly onto exam wording:
+  </p>
+  <ol class="steps">
+    <li><strong>Classify only</strong> — the file contains one document type; label it.</li>
+    <li><strong>Classify and analyze</strong> — label it, then route it to the right extraction analyzer.</li>
+    <li><strong>Classify and segment</strong> — one file holds several concatenated documents (a loan pack: application form, pay slip, bank statement); split it.</li>
+    <li><strong>Classify, segment and analyze</strong> — split, then route each segment to its own analyzer.</li>
+    <li><strong>Hierarchical classifier</strong> — a category can route to another classifier for a second level.</li>
+  </ol>
+  <p>
+    Classification needs <strong>no training dataset</strong>: you define up to <strong>200</strong> category names and
+    descriptions in the analyze operation. From the GA version you must include an <strong><code>other</code></strong>
+    category, or every file is forced into one of your defined categories. The minimum classification unit for documents
+    is a <strong>single page</strong> — intra-page classification is not supported.
+  </p>
+
+  <h3 id="clean-representations">Clean, grounded representations for RAG</h3>
+  <p>
+    "Produce clean, grounded representations to use with agents and RAG" is the objective that explains why Content
+    Understanding sits in this skill area at all. A raw PDF is a bad input to a vector store; a Content Understanding
+    markdown output is a good one, because it:
+  </p>
+  <ul>
+    <li>Preserves <strong>structure</strong> — headings, sections, tables (including tables spanning multiple pages as one logical table), reading order.</li>
+    <li>Captures <strong>figures</strong> — <code>enableFigureDescription</code> and <code>enableFigureAnalysis</code> turn charts and diagrams into text that can be indexed and retrieved. Information that is otherwise invisible to search.</li>
+    <li>Detects <strong>annotations</strong> — handwritten notes, underlines, strikethroughs.</li>
+    <li>Normalises <strong>every modality</strong> into the same shape, so audio and video land in the same index as documents.</li>
+    <li>Carries <strong>grounding and confidence</strong>, so citations point at a real region of a real page.</li>
+  </ul>
+
+  <Callout type="tip" title="The RAG ingestion flow, end to end">
+    <p>
+      <strong>1.</strong> Land the source files in Blob Storage or ADLS Gen2. <strong>2.</strong> Convert each file to a
+      clean representation — Content Understanding markdown for anything complex, OCR for scanned images.
+      <strong>3.</strong> Chunk with a layout-aware chunker rather than fixed length. <strong>4.</strong> Embed the
+      chunks with an embedding skill. <strong>5.</strong> Index chunk text, vector, a parent-document key and filterable
+      metadata. <strong>6.</strong> Query with hybrid + semantic ranking, filtered by metadata.
+      <strong>7.</strong> Attach the index to the agent so answers carry citations. <strong>8.</strong> Schedule the
+      indexer and monitor its execution history.
+    </p>
+  </Callout>
+
+  <h3 id="cu-vs-di">Content Understanding vs Document Intelligence</h3>
+  <div class="table-wrap">
+    <table class="tbl t-orange">
+      <thead><tr><th></th><th>Content Understanding</th><th>Document Intelligence</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Approach</strong></td><td>Generative, schema-driven extraction with an LLM underneath</td><td>Trained prebuilt and custom document models</td></tr>
+        <tr><td><strong>Modalities</strong></td><td>Documents, <strong>images, audio and video</strong></td><td>Documents and forms</td></tr>
+        <tr><td><strong>Defining a schema</strong></td><td>Describe the fields in natural language — no labelling required to start</td><td>Prebuilt models, or label a training set for custom models</td></tr>
+        <tr><td><strong>Output</strong></td><td>Markdown or JSON, with confidence and source grounding</td><td>Structured JSON with confidence</td></tr>
+        <tr><td><strong>Choose it when</strong></td><td>Mixed modalities, a bespoke schema, RAG-ready output, multi-document reasoning (pro mode)</td><td>A well-known form type with a prebuilt model, or a stable high-volume layout with a trained custom model</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <Callout type="note" title="Two portals, and the resource you need">
+    <p>
+      Content Understanding is used from the <strong>Foundry portal</strong> (for agentic workflows, via the Content
+      Understanding tool) and from <strong>Content Understanding Studio</strong> (for analyzer improvement through data
+      labelling, and classification-based custom analyzers — the natural home if you are migrating from Document
+      Intelligence). Either way you need a <strong>Foundry resource</strong>. Content Understanding also brings
+      <strong>your own model deployments</strong>: it uses generative and embedding models you have deployed, which is
+      why its guardrail behaviour follows <em>that</em> deployment's configuration.
+    </p>
+  </Callout>
+
+  <Callout type="exam" title="Skill 5 rapid-fire review">
+    <ul style="margin-bottom:0">
+      <li>Four objects: <strong>data source, index, skillset, indexer</strong>. Skillsets allow <strong>1–30</strong> skills.</li>
+      <li>Indexer stages: <strong>document cracking → field mappings → skillset → output field mappings → index</strong>.</li>
+      <li><strong>Embedding skill</strong> = indexing time. <strong>Vectorizer</strong> = query time. Same model for both.</li>
+      <li>BM25 for text, <strong>HNSW</strong> or exhaustive KNN for vectors, <strong>RRF</strong> to merge, semantic ranker to rerank.</li>
+      <li><strong>Filters and semantic ranking are text-only.</strong> <code>vectorFilterMode</code> sets pre- or post-filtering.</li>
+      <li>Semantic ranker adds <strong>L2 reranking, captions and answers, and query rewrite</strong>.</li>
+      <li><strong>Hybrid + semantic</strong> is the best-relevance default for grounding.</li>
+      <li><strong>Knowledge store</strong> = enriched content persisted to Storage for non-search use. <strong>Enrichment caching</strong> = reuse expensive OCR.</li>
+      <li>Content Understanding: <strong>Extract</strong> is documents-only; <strong>Classify</strong> and <strong>Generate</strong> work across modalities.</li>
+      <li>Classification needs <strong>no training data</strong>, supports up to <strong>200 categories</strong>, requires an <strong><code>other</code></strong> category, and works at <strong>page</strong> granularity for documents.</li>
+      <li><code>estimateFieldSourceAndConfidence</code> turns on <strong>confidence scores and grounding</strong> — the enabler for straight-through processing.</li>
+      <li>Azure AI Search tool over a private network requires <strong>managed identity</strong>, not keys.</li>
+    </ul>
+  </Callout>
+</NoteLayout>

@@ -1,0 +1,246 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import Callout from '../components/Callout.astro';
+import Mermaid from '../components/Mermaid.astro';
+import NavCard from '../components/NavCard.astro';
+import { PAGES, SITE, SKILL_PAGES, pageBySlug } from '../data/site';
+import { absolute, href } from '../lib/urls';
+
+const cards = PAGES.filter((p) => p.slug !== '');
+const foundations = pageBySlug('foundry-foundations')!;
+
+const description = `Exam-focused study notes for Microsoft Exam ${SITE.exam}: ${SITE.examTitle}. Aligned to the skills measured as of ${SITE.skillsMeasured}, with Mermaid diagrams, decision tables, Python samples and exam caveats.`;
+
+const schema = [
+  {
+    '@type': 'Course',
+    name: `Exam ${SITE.exam}: ${SITE.examTitle} — Study Notes`,
+    description,
+    url: absolute(SITE.origin, ''),
+    inLanguage: 'en',
+    provider: { '@type': 'Person', name: SITE.author.name, url: SITE.author.site },
+    teaches: SKILL_PAGES.map((p) => p.label),
+    hasCourseInstance: { '@type': 'CourseInstance', courseMode: 'online', courseWorkload: 'PT40H' },
+  },
+];
+
+// Governance and observability wrap the resource rather than pointing at it, so
+// containment carries that relationship and the diagram needs no crossing edges.
+const landscape = `
+flowchart TB
+  APP["Your app or agent code<br/>one project endpoint"] --> PRJ
+
+  subgraph PLANE["Wrapped by one governance and observability plane — Entra ID · RBAC · guardrails · private networking · Azure Policy · tracing · evaluations · dashboards"]
+    subgraph RES["Foundry resource — one Azure resource, one RBAC and network boundary"]
+      direction TB
+      PRJ["Foundry project<br/>child resource · your workspace"]
+      PRJ --> M["Foundry Models<br/>10,000+ models<br/>deployments and routing"]
+      PRJ --> A["Foundry Agent Service<br/>prompt and hosted agents<br/>Responses API"]
+      PRJ --> T["Foundry Tools<br/>Content Understanding · Language<br/>Speech · Translator · Vision"]
+      PRJ --> K["Knowledge and retrieval<br/>Azure AI Search · Foundry IQ<br/>file search · memory"]
+    end
+  end
+`;
+
+const journey = `
+flowchart LR
+  F["Foundations<br/>resource, project,<br/>vocabulary"] --> S1["Skill 1<br/>Plan and manage<br/>25–30%"]
+  S1 --> S2["Skill 2<br/>GenAI and agents<br/>30–35%"]
+  S2 --> S3["Skill 3<br/>Computer vision<br/>10–15%"]
+  S2 --> S4["Skill 4<br/>Text and speech<br/>10–15%"]
+  S2 --> S5["Skill 5<br/>Information extraction<br/>10–15%"]
+  S3 --> SDK["SDK deep dive"]
+  S4 --> SDK
+  S5 --> SDK
+  SDK --> TIPS["Exam tips<br/>and caveats"]
+`;
+---
+
+<BaseLayout
+  title={`${SITE.exam} Study Notes · ${SITE.examTitle}`}
+  description={description}
+  slug=""
+  ogType="website"
+  schema={schema}
+>
+  <main class="page-wide" id="main">
+    <section class="hero">
+      <span class="eyebrow">Microsoft Certification · Exam {SITE.exam}</span>
+      <h1>Azure AI Apps and Agents Developer</h1>
+      <p>
+        A complete, exam-focused companion to the official documentation — built around the
+        <strong>skills measured as of {SITE.skillsMeasured}</strong>. Learn the Foundry platform, memorise the caveats,
+        and walk into the exam able to pick the right service on the first read of the question.
+      </p>
+      <div class="hero-meta">
+        <span>⏱ 100 min exam</span>
+        <span>✅ Pass mark: 700/1000</span>
+        <span>📚 5 skill areas</span>
+        <span>🐍 Python-based</span>
+        <span>🎓 Associate level</span>
+      </div>
+    </section>
+
+    <!-- The hero sits outside .content so it keeps its own light-on-dark type. -->
+    <div class="content">
+      <div class="card">
+      <p class="lead" style="margin-top:0">
+        AI-103 validates that you can <strong>plan, build, secure and operate</strong> generative AI and agentic
+        solutions on <strong>Microsoft Foundry</strong>. It is a decision-heavy developer exam: most questions ask
+        <em>which model, which service, which tool, which deployment type</em> — not "what does this do?". You are
+        expected to read Python and recognise what an SDK snippet does or what is wrong with it.
+      </p>
+      <Callout type="note" title="How to use these notes">
+        <p>
+          Start with <a href={href('foundry-foundations')}>Foundry Foundations</a> to build the mental model — the
+          Foundry resource, projects, models, tools and the renamed vocabulary. Then work the five skill pages in
+          outline order, keep the <a href={href('sdk-deep-dive')}>SDK deep dive</a> open while you practise, and drill
+          <a href={href('exam-tips')}>Exam tips &amp; caveats</a> in the final week. These notes are a
+          <strong>companion</strong>, not a replacement: pair every section with hands-on time in the
+          <a href="https://ai.azure.com" target="_blank" rel="noopener">Foundry portal</a> and the official Learn modules.
+        </p>
+      </Callout>
+    </div>
+
+    <Callout type="rename" title="The single biggest thing to get straight before you study">
+      <p>
+        This exam sits on top of a <strong>platform-wide rename</strong>. Azure AI Foundry is now
+        <strong>Microsoft Foundry</strong>; Azure AI Services are now <strong>Foundry Tools</strong>; the Assistants API
+        is now the <strong>Responses API</strong>; threads, messages, runs and assistants are now
+        <strong>conversations, items, responses and agent versions</strong>; and the hub + Azure OpenAI + Azure AI
+        Services resource sprawl collapses into a single <strong>Foundry resource</strong> with child
+        <strong>projects</strong>. Exam items and documentation use the new names, but plenty of tutorials, blog posts and
+        practice tests still use the old ones. The <a href={href('foundry-foundations')}>Foundations page</a> carries the
+        full translation table — learn it first and the rest of the syllabus stops being confusing.
+      </p>
+    </Callout>
+
+    <h2 style="margin-bottom:6px">The platform in one picture</h2>
+    <p class="lead" style="margin-top:0">
+      Almost every AI-103 question lives somewhere on this diagram. If you can place a service on it, you can usually
+      eliminate two of the four answers.
+    </p>
+    <Mermaid
+      code={landscape}
+      caption="Microsoft Foundry: one Azure resource holding projects, models, agents, tools and knowledge, wrapped in a single governance and observability plane."
+    />
+
+    <h2 style="margin-bottom:6px">Skills measured at a glance</h2>
+    <p class="lead" style="margin-top:0">
+      The weighting is <strong>not</strong> even. Skills 1 and 2 together are roughly
+      <strong>55–65% of the exam</strong> — budget your study time accordingly, and do not let the three 10–15% areas
+      eat your schedule.
+    </p>
+
+    <div class="card">
+      <div class="weight-list">
+        {
+          SKILL_PAGES.map((p) => (
+            <div class="weight-row" style={`--accent:${p.accent}`}>
+              <div class="wr-top">
+                <span class="wr-name">{p.label}</span>
+                <span class="wr-pct">{p.weight}</span>
+              </div>
+              <div class="progress">
+                <span data-pct={p.weightPct} />
+              </div>
+            </div>
+          ))
+        }
+      </div>
+    </div>
+
+    <h2 style="margin-bottom:6px">Suggested study order</h2>
+    <Mermaid
+      code={journey}
+      caption="Foundations first, then the two heavyweight skills, then the three focused areas — which all reuse the same Foundry primitives."
+    />
+
+    <h2 style="margin-bottom:6px">Study pages</h2>
+    <div class="card-grid">
+      {
+        cards.map((p) => (
+          <NavCard
+            slug={p.slug}
+            badge={p.badge}
+            title={p.label}
+            accent={p.accent}
+            cta={p.slug === foundations.slug ? 'Start here →' : p.group === 'extras' ? 'Drill these →' : 'Explore →'}
+          >
+            {p.blurb}
+          </NavCard>
+        ))
+      }
+    </div>
+
+    <h2 style="margin-bottom:6px">Before you book</h2>
+    <div class="stat-grid">
+      <div class="stat" style="--accent:var(--s1)">
+        <div class="s-num">700</div>
+        <div class="s-lbl">Score needed to pass (scaled to 1000)</div>
+      </div>
+      <div class="stat" style="--accent:var(--s2)">
+        <div class="s-num">5</div>
+        <div class="s-lbl">Skill areas, unevenly weighted</div>
+      </div>
+      <div class="stat" style="--accent:var(--s3)">
+        <div class="s-num">~65%</div>
+        <div class="s-lbl">Of the exam is Skills 1 and 2 combined</div>
+      </div>
+      <div class="stat" style="--accent:var(--s5)">
+        <div class="s-num">1y</div>
+        <div class="s-lbl">Renewal — free online assessment</div>
+      </div>
+    </div>
+
+    <Callout type="exam" title="Exam reality check">
+      <p>
+        Expect multiple choice and multiple response, <strong>drag-and-drop ordering</strong>, "build list" sequencing,
+        <strong>hotspot</strong> (dropdown) items and yes/no statement sets, plus possible case studies. You will be
+        shown short <strong>Python</strong> snippets using the Foundry SDK and asked what they do, what to insert, or
+        what is wrong. Most questions cover <strong>generally available</strong> features; commonly used
+        <strong>preview</strong> features can appear — and in Foundry a great deal is still in preview, so know which
+        side of the line each capability sits on.
+      </p>
+    </Callout>
+
+    <Callout type="tip" title="Two habits that pay off more than extra reading">
+      <p>
+        <strong>One:</strong> for every service, be able to say in one sentence what it does that the neighbouring
+        service does not — Content Understanding vs Document Intelligence, web search vs Grounding with Bing, prompt
+        agent vs hosted agent, file search vs Azure AI Search. The exam is built on those boundaries.
+        <strong>Two:</strong> build one small RAG agent end to end in a real project. A single hands-on run teaches you
+        the endpoint shapes, role assignments and error messages that four chapters of reading will not.
+      </p>
+    </Callout>
+
+    <Callout type="warn" title="Disclaimer">
+      <p>
+        These notes are an independent study aid for <strong>learning purposes only</strong> and are not affiliated with
+        or endorsed by Microsoft. Foundry ships changes almost weekly, and Microsoft renames and re-scopes features
+        frequently — <strong>always verify every detail against the official Microsoft documentation</strong> linked
+        throughout before relying on it.
+      </p>
+    </Callout>
+    </div>
+  </main>
+
+  <script>
+    // Fill the weighting bars when they scroll into view.
+    const bars = document.querySelectorAll<HTMLElement>('.progress > span[data-pct]');
+    if (bars.length) {
+      const observer = new IntersectionObserver(
+        (entries) => {
+          entries.forEach((entry) => {
+            if (!entry.isIntersecting) return;
+            const el = entry.target as HTMLElement;
+            el.style.width = `${el.dataset.pct}%`;
+            observer.unobserve(el);
+          });
+        },
+        { threshold: 0.35 },
+      );
+      bars.forEach((b) => observer.observe(b));
+    }
+  </script>
+</BaseLayout>

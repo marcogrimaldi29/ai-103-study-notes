@@ -1,0 +1,546 @@
+---
+import NoteLayout from '../../layouts/NoteLayout.astro';
+import Callout from '../../components/Callout.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import { href } from '../../lib/urls';
+
+const serviceChoice = `
+flowchart TD
+  Q["What does the workload need to do?"]
+  Q --> G["Generate or reason<br/>over free text"] --> GM["Foundry Models<br/>LLM / SLM / reasoning"]
+  Q --> R["Answer from<br/>private content"] --> RA{"How much content,<br/>how complex?"}
+  RA -- "A handful of files,<br/>Foundry owns the lifecycle" --> FS["File search tool<br/>+ vector store"]
+  RA -- "Enterprise corpus,<br/>filters, permissions, scale" --> AS["Azure AI Search index"]
+  RA -- "Many sources, one reusable,<br/>permission-aware layer" --> IQ["Foundry IQ<br/>knowledge base"]
+  Q --> P["Turn messy files into<br/>clean structured data"] --> CU["Content Understanding"]
+  Q --> T["Bounded NLP / speech<br/>/ vision task"] --> FT["Foundry Tools<br/>Language · Speech · Translator · Vision"]
+  Q --> A["Take actions,<br/>multi-step"] --> AG["Foundry Agent Service<br/>+ Toolbox"]
+  Q --> W["Public web facts"] --> WS["Web search tool /<br/>Grounding with Bing"]
+`;
+
+const cicd = `
+flowchart LR
+  DEV["Developer<br/>branch"] --> PR["Pull request"]
+  PR --> CI["CI: lint, unit tests,<br/>evaluate agent against<br/>a golden dataset"]
+  CI -->|"quality gate passes"| BICEP["Deploy infra<br/>Bicep / Terraform:<br/>resource, project,<br/>deployments, connections"]
+  BICEP --> AGENT["Create or update<br/>agent version via SDK"]
+  AGENT --> TEST["Test project<br/>smoke + safety evals"]
+  TEST -->|"promote"| PROD["Prod project<br/>publish agent,<br/>stable endpoint"]
+  PROD --> MON["Continuous evaluation<br/>+ Azure Monitor alerts"]
+  MON -.->|"regression"| DEV
+`;
+
+const guardrailFlow = `
+flowchart LR
+  U["User input"] -->|"Control: user prompt attacks,<br/>hate, violence, PII…"| M["Model / agent"]
+  M -->|"Control: tool call<br/>(agents, preview)"| TOOL["Tool"]
+  TOOL -->|"Control: tool response<br/>(agents, preview)"| M
+  M -->|"Control: output<br/>groundedness, protected material…"| OUT["Response to user"]
+`;
+
+const configureDeployment = `# Deploy a model with the Azure CLI. The SKU name is the deployment TYPE.
+az cognitiveservices account deployment create \\
+  --name my-foundry \\
+  --resource-group rg-ai103 \\
+  --deployment-name gpt-5-mini \\
+  --model-name gpt-5-mini \\
+  --model-version "2026-04-01" \\
+  --model-format OpenAI \\
+  --sku-name GlobalStandard \\
+  --sku-capacity 50          # capacity units -> TPM and, proportionally, RPM`;
+
+const retryCode = `import time
+import random
+from openai import RateLimitError
+
+def call_with_backoff(openai, *, max_attempts=5, **kwargs):
+    """Exponential backoff with jitter.
+
+    A 429 is not always a quota problem: it can be capacity throttling or a
+    temporary rate-limit adjustment. Honour retry-after-ms when the service
+    sends it, and only request more quota when the message really says the
+    deployment's rate limit was exceeded.
+    """
+    for attempt in range(max_attempts):
+        try:
+            return openai.responses.create(**kwargs)
+        except RateLimitError as err:
+            if attempt == max_attempts - 1:
+                raise
+            retry_after_ms = getattr(err, "response", None) and err.response.headers.get("retry-after-ms")
+            delay = int(retry_after_ms) / 1000 if retry_after_ms else (2**attempt) + random.random()
+            time.sleep(delay)`;
+---
+
+<NoteLayout
+  slug="skill-1-plan-manage"
+  description="AI-103 Skill 1 (25–30%): choosing Foundry models and services, designing the infrastructure, deployment configuration and CI/CD, quotas, rate limits and cost, monitoring and drift, keyless security and private networking, and responsible AI guardrails, evaluators and oversight."
+  intro="The architecture and operations quarter of the exam. It rewards you for knowing which service to reach for, what a deployment type actually changes, why a 429 is not always a quota problem, and where each responsible-AI control is enforced."
+>
+  <div class="card">
+    <strong>Four objectives in this skill area:</strong>
+    <ul style="margin-bottom:0">
+      <li><a href="#choose">1.1 Choose the appropriate Foundry services</a> — models, generative services, retrieval and indexing, agent memory/tools/knowledge</li>
+      <li><a href="#setup">1.2 Set up AI solutions in Foundry</a> — infrastructure design, deployment options, model and agent deployments, CI/CD</li>
+      <li><a href="#manage">1.3 Manage, monitor and secure</a> — quota, scaling, rate limits, cost; performance, drift, safety and grounding; ingestion and index health; identity and networking</li>
+      <li><a href="#rai">1.4 Implement responsible AI</a> — guardrails, evaluators, auditing and provenance, agent oversight</li>
+    </ul>
+  </div>
+
+  <!-- ================================================================= -->
+  <h2 id="choose"><span class="num">1.1</span> Choose the appropriate Foundry services</h2>
+
+  <p>
+    This objective is pure decision-making, and it is the highest-density source of "which service?" questions in the
+    whole exam. The diagram below is the map; the tables underneath are the tie-breakers.
+  </p>
+
+  <Mermaid code={serviceChoice} caption="Routing a requirement to a Foundry capability. Most exam scenarios are one of these seven branches." />
+
+  <h3 id="model-choice">Choosing a model for each task</h3>
+  <p>
+    The trade-off table lives on the <a href={href('foundry-foundations')}>Foundations page</a>; what follows is the
+    part the exam actually phrases as scenarios.
+  </p>
+
+  <div class="table-wrap">
+    <table class="tbl t-violet">
+      <thead><tr><th>Scenario wording</th><th>Signal</th><th>Answer</th></tr></thead>
+      <tbody>
+        <tr><td>"Millions of short classifications per day, cost per call is the constraint"</td><td>Volume + narrow task</td><td><strong>Small language model</strong> (Phi family / mini tier)</td></tr>
+        <tr><td>"Must run on a factory device with intermittent connectivity"</td><td>Edge</td><td><strong>SLM</strong>, or a <strong>Foundry Tools container</strong> if the task is bounded</td></tr>
+        <tr><td>"Plan a multi-step remediation and justify each step"</td><td>Deep reasoning</td><td><strong>Reasoning model</strong> (o-series or equivalent)</td></tr>
+        <tr><td>"Answer questions about the photo the user uploaded"</td><td>Image + text input</td><td><strong>Multimodal model</strong></td></tr>
+        <tr><td>"Extract 14 named fields from scanned invoices with a confidence score per field"</td><td>Schema + confidence + audit</td><td><strong>Content Understanding</strong>, not a raw prompt</td></tr>
+        <tr><td>"Redact national ID numbers before the text leaves our tenant"</td><td>Deterministic compliance</td><td><strong>Azure Language PII detection</strong> (container if it must stay on-prem)</td></tr>
+        <tr><td>"Find semantically similar support tickets"</td><td>Similarity, no generation</td><td><strong>Embedding model</strong> + vector search</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 id="retrieval-choice">Choosing a retrieval and indexing method</h3>
+  <p>
+    "Choose an appropriate method for retrieval and indexing" is its own bullet in the outline. Four options, and they
+    are not interchangeable:
+  </p>
+
+  <div class="table-wrap">
+    <table class="tbl t-violet">
+      <thead><tr><th>Option</th><th>What it is</th><th>Choose it when</th><th>Limits</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>File search tool</strong></td>
+          <td>Foundry-hosted vector stores over files you upload to the project</td>
+          <td>A curated knowledge base where you want Foundry to own ingestion and the vector-store lifecycle; fastest path to a working RAG agent</td>
+          <td>No enterprise-grade filtering, security trimming or custom skillsets</td>
+        </tr>
+        <tr>
+          <td><strong>Azure AI Search index</strong></td>
+          <td>Your own index with keyword, vector, hybrid and semantic ranking, filters, facets, scoring profiles and skillsets</td>
+          <td>The corpus is large or changing, you need filters and relevance tuning, or the index is already the source of truth</td>
+          <td>You own the indexer, the schema and the refresh</td>
+        </tr>
+        <tr>
+          <td><strong>Foundry IQ knowledge base</strong></td>
+          <td>A managed knowledge layer over Azure AI Search: one or more <em>knowledge sources</em>, an optional LLM for query planning and answer synthesis, and agentic retrieval</td>
+          <td>Multiple sources behind one reusable, permission-aware retrieval surface shared by several agents</td>
+          <td>Adds a planning model to the cost and latency budget</td>
+        </tr>
+        <tr>
+          <td><strong>Agentic retrieval</strong></td>
+          <td>A multi-query pipeline: plan → decompose into subqueries → retrieve in parallel → semantically rerank → merge</td>
+          <td>Complex, multi-part questions where a single query loses recall</td>
+          <td>More model calls per answer; needs a knowledge base</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <Callout type="exam" title="File search vs Azure AI Search — the deciding words">
+    <p>
+      Watch for <strong>"filter by department"</strong>, <strong>"only show documents the user is allowed to see"</strong>,
+      <strong>"millions of documents"</strong>, <strong>"tune relevance"</strong>, <strong>"enrich during
+      indexing"</strong> or <strong>"the index already exists"</strong>. Any of those means <strong>Azure AI
+      Search</strong>. Words like <strong>"a folder of PDFs"</strong>, <strong>"get a prototype working"</strong> or
+      <strong>"let the service manage the vector store"</strong> mean <strong>file search</strong>.
+    </p>
+  </Callout>
+
+  <h3 id="memory-tools">Memory, tools and knowledge for agents</h3>
+  <p>Three different things that scenarios deliberately blur:</p>
+
+  <dl class="terms">
+    <dt>Conversation state</dt>
+    <dd>
+      The transcript of the current interaction, held server-side as a <strong>conversation</strong> of
+      <strong>items</strong>. Pass the conversation id on each call and history is maintained for you. You can bring your
+      own <strong>Azure Cosmos DB</strong> for conversation state when compliance requires you to own the store.
+    </dd>
+    <dt>Semantic memory</dt>
+    <dd>
+      Durable facts and summaries <em>extracted</em> from conversations and stored by scope, then retrieved in later
+      sessions. This is what "remembers the user across sessions" means — it is deliberately not the full transcript.
+      Extraction is asynchronous, so a write is not immediately readable.
+    </dd>
+    <dt>Knowledge</dt>
+    <dd>
+      Grounding content the agent retrieves from: file search, Azure AI Search, Foundry IQ, SharePoint, Fabric,
+      Work IQ, or the public web. Knowledge is <em>read</em>; memory is <em>learned</em>.
+    </dd>
+    <dt>Tools</dt>
+    <dd>
+      Actions the agent can take: functions, OpenAPI endpoints, MCP servers, code interpreter, browser automation,
+      agent-to-agent calls. Curated into a <strong>toolbox</strong> for reuse and central governance.
+    </dd>
+  </dl>
+
+  <Callout type="tip" title="A phrasing cue that keeps paying out">
+    <p>
+      "The agent should <strong>recall the user's preferences next week</strong>" → <strong>memory</strong>. "The agent
+      should <strong>cite the HR policy</strong>" → <strong>knowledge / retrieval</strong>. "The agent should
+      <strong>create the ticket</strong>" → <strong>tool</strong>. "The agent should keep track of <strong>this
+      conversation</strong>" → <strong>conversation state</strong>.
+    </p>
+  </Callout>
+
+  <!-- ================================================================= -->
+  <h2 id="setup"><span class="num">1.2</span> Set up AI solutions in Foundry</h2>
+
+  <h3 id="infrastructure">Designing the Azure infrastructure</h3>
+  <p>A defensible default enterprise topology, and the reasoning behind each choice:</p>
+
+  <ol class="steps">
+    <li>
+      <strong>One Foundry resource per security/governance boundary</strong> — typically per environment (dev, test,
+      prod) or per business unit with genuinely different compliance needs. Not one per team: that multiplies networking
+      and policy work for no benefit.
+    </li>
+    <li>
+      <strong>One project per team or application</strong> inside that resource. Projects inherit the parent's security
+      and connections and can carry their own RBAC.
+    </li>
+    <li>
+      <strong>Model deployments at resource scope</strong>, shared by the projects. Size them with quota in mind — see
+      <a href="#quota">quota and rate limits</a>.
+    </li>
+    <li>
+      <strong>Connections for everything external</strong>: Azure AI Search for retrieval, Storage for documents,
+      Application Insights for traces, Cosmos DB if you must own conversation state. Authenticate with
+      <strong>managed identity</strong>, and remember the role assignment on the target.
+    </li>
+    <li>
+      <strong>Private networking where required</strong>: private endpoints on the Foundry resource and every connected
+      service, public network access disabled. Note that key-based auth is not supported with private networking for the
+      Azure AI Search tool — use the project managed identity.
+    </li>
+    <li>
+      <strong>Guardrails and Azure Policy</strong> applied at resource scope so every project inherits them.
+    </li>
+    <li>
+      <strong>Observability wired up from day one</strong>: Application Insights connected, tracing on, an evaluation
+      dataset in source control.
+    </li>
+  </ol>
+
+  <Callout type="note" title="High availability and regional failure">
+    <p>
+      With <strong>Global Standard</strong> and <strong>Data Zone Standard</strong>, if the primary region has an
+      interruption, all traffic initially routed there is affected — global routing is not automatic disaster recovery.
+      For real resilience you deploy the same model in <strong>more than one region</strong> and fail over (or load
+      balance) in front of it, typically through a gateway such as Azure API Management.
+    </p>
+  </Callout>
+
+  <h3 id="model-deployments">Configuring model and agent deployments</h3>
+  <p>
+    A deployment binds a model, a version, a deployment type (the SKU) and a capacity allocation. Capacity is the lever
+    that sets your rate limits.
+  </p>
+
+  <CodeBlock code={configureDeployment} lang="bash" label="Azure CLI · model deployment" />
+
+  <p>Other settings the exam expects you to know exist:</p>
+  <ul>
+    <li>
+      <strong>Version upgrade policy</strong> — auto-update to default, upgrade when expired, or pin. Models
+      <em>retire</em>; pinning without a plan means an outage on retirement day.
+    </li>
+    <li><strong>Guardrail assignment</strong> — every deployment gets one; the default is <code>Microsoft.DefaultV2</code>.</li>
+    <li><strong>Dynamic quota</strong> <span class="pill p-amber">preview</span> — lets a standard deployment opportunistically exceed its TPM when spare capacity exists. It can only ever <em>raise</em> the effective limit, never lower it, and the extra tokens bill at normal rates.</li>
+    <li>
+      <strong>Agent deployments</strong> — prompt agents are created as <em>agent versions</em> through the portal or
+      SDK; hosted agents ship as a container image or a .zip that Foundry builds. Publishing promotes an agent to a
+      managed resource with a stable endpoint.
+    </li>
+  </ul>
+
+  <h3 id="cicd">CI/CD for Foundry projects</h3>
+  <Mermaid code={cicd} caption="Evaluation as a quality gate is what makes this a genuine AI CI/CD pipeline rather than ordinary app deployment." />
+
+  <p>The pieces the outline expects:</p>
+  <ul>
+    <li><strong>Infrastructure as code</strong> — Bicep, ARM or Terraform for the resource, projects, deployments and connections. Deployments can be created with the Azure CLI or Bicep.</li>
+    <li><strong>Agent definitions in code</strong> — define prompt agents with the SDK or REST in the pipeline rather than clicking in the portal, so they get version control, code review and automated rollout.</li>
+    <li><strong>Automated evaluation as a gate</strong> — run evaluators against a golden dataset on every PR and fail the build on regression. This is the distinctive part.</li>
+    <li><strong>Agent versioning and rollback</strong> — versions are snapshotted automatically; you can roll back or compare.</li>
+    <li><strong>Environment promotion</strong> — separate dev/test/prod projects, promote by publishing the tested agent version.</li>
+    <li><strong>azd</strong> for scaffolding and deploying hosted agents from the command line.</li>
+  </ul>
+
+  <Callout type="exam" title="Why portal-built agents lose marks">
+    <p>
+      If a scenario asks how to make agent changes <strong>reviewable, repeatable and promotable across
+      environments</strong>, the answer is <strong>define the agent in code and create the version from the
+      pipeline</strong> — not "export from the portal" and not "recreate it manually in prod".
+    </p>
+  </Callout>
+
+  <!-- ================================================================= -->
+  <h2 id="manage"><span class="num">1.3</span> Manage, monitor and secure AI systems</h2>
+
+  <h3 id="quota">Quota, rate limits, scaling and cost</h3>
+
+  <p>
+    Quota is assigned to your <strong>subscription</strong>, <strong>per region, per model, per deployment type</strong>,
+    in units of <strong>tokens per minute (TPM)</strong>. You spend that quota by assigning capacity to deployments; a
+    proportional <strong>requests per minute (RPM)</strong> limit comes with it (the ratio varies by model).
+  </p>
+
+  <div class="table-wrap">
+    <table class="tbl t-violet">
+      <thead><tr><th>Concept</th><th>What it actually means</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Quota</strong></td><td>The ceiling of TPM you may allocate across all deployments of a model in a region and deployment type</td></tr>
+        <tr><td><strong>TPM rate limit</strong></td><td>Enforced per deployment, per minute, on an <em>estimate</em> made when the request arrives — prompt + <code>max_tokens</code> — not on billed tokens</td></tr>
+        <tr><td><strong>RPM rate limit</strong></td><td>Derived from TPM. Evaluated over short windows (1–10 seconds), so bursts throttle even when the per-minute total is fine</td></tr>
+        <tr><td><strong>429 Too Many Requests</strong></td><td>Rate limit exceeded, capacity throttling, or a temporary protective reduction of your effective limit</td></tr>
+        <tr><td><strong>403 Forbidden</strong></td><td>A <em>total token quota</em> (hourly/daily/monthly) configured through the AI Gateway has been exhausted — a different mechanism from TPM</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <Callout type="exam" title="429s: four causes, four different fixes">
+    <ol style="margin-bottom:0">
+      <li><strong>"Rate limit is exceeded"</strong> → genuinely over TPM/RPM. Raise the deployment's capacity, rebalance quota across deployments, or request a quota increase.</li>
+      <li><strong>"Service is temporarily unable to process your request"</strong> → backend capacity pressure. Retry with <code>retry-after-ms</code>; if persistent, move to <strong>provisioned throughput</strong>.</li>
+      <li><strong>Temporary rate-limit adjustment</strong> → <code>x-ratelimit-limit-tokens</code> in the response headers is <em>lower</em> than your configured TPM. Standard deployments share a pool; the reduction is protective and usually clears within hours. Back off, do not request quota.</li>
+      <li><strong>Usage metrics look low but you still get 429s</strong> → <code>max_tokens</code> is inflating the estimate. Lower it to match the response you actually expect.</li>
+    </ol>
+  </Callout>
+
+  <CodeBlock code={retryCode} lang="python" label="Python · backoff" />
+
+  <h4>Cost levers, cheapest first</h4>
+  <ul>
+    <li><strong>Right-size the model</strong> — an SLM or a mini tier for routing, extraction and classification; the big model only where it earns its cost.</li>
+    <li><strong>Batch deployment types</strong> for asynchronous work — roughly <strong>50% cheaper</strong>.</li>
+    <li><strong>Prompt caching</strong> and shorter system prompts — input tokens are the silent majority of spend in RAG.</li>
+    <li><strong>Trim retrieval</strong> — fewer, better chunks beats stuffing the context window; it also improves groundedness.</li>
+    <li><strong>Tool search</strong> in a toolbox — stops every tool definition being sent on every request once you have dozens of tools.</li>
+    <li><strong>Provisioned throughput</strong> — for steady high volume it is cheaper and more predictable than standard at scale.</li>
+    <li><strong>Token limits via the AI Gateway</strong> — per-project, per-deployment TPM caps and total token quotas to stop one team consuming everything.</li>
+  </ul>
+
+  <h3 id="monitoring">Monitoring performance, drift, safety and grounding</h3>
+
+  <p>
+    Foundry observability has three legs, and the exam expects you to name the right one:
+    <strong>tracing</strong> (what happened), <strong>evaluation</strong> (was it any good), <strong>monitoring</strong>
+    (is it still good in production).
+  </p>
+
+  <div class="table-wrap">
+    <table class="tbl t-violet">
+      <thead><tr><th>You need to…</th><th>Use</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td>See every model call, tool invocation and agent decision in one timeline</td><td><strong>Tracing</strong></td><td>Built on <strong>OpenTelemetry</strong>, flows into Azure Monitor Application Insights. Supports LangChain, LangGraph, OpenAI Agents SDK and Microsoft Agent Framework</td></tr>
+        <tr><td>Measure quality, safety and task success</td><td><strong>Evaluators</strong></td><td>Built-in and custom; run locally, in the cloud, or from CI</td></tr>
+        <tr><td>Track token consumption, latency and error rates live</td><td><strong>Monitoring dashboards</strong></td><td>Foundry observability dashboard + Application Insights</td></tr>
+        <tr><td>Detect quality decay over time</td><td><strong>Scheduled evaluation</strong> against a fixed test dataset</td><td>This is how "drift" is detected in practice — the model or the data moved, the score dropped</td></tr>
+        <tr><td>Sample real production traffic for quality</td><td><strong>Continuous evaluation</strong></td><td>Evaluates a sampled rate of live traffic</td></tr>
+        <tr><td>Probe for safety and security vulnerabilities</td><td><strong>AI red teaming agent</strong></td><td>Uses Microsoft's <strong>PyRIT</strong> framework; best with a human in the loop. Can be scheduled</td></tr>
+        <tr><td>Be alerted when outputs breach a threshold or turn harmful</td><td><strong>Azure Monitor alerts</strong></td><td>Wired to evaluation metrics and safety signals</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h4 id="ingestion-health">Ingestion quality, index health and relevance</h4>
+  <p>
+    A separate bullet in the outline, and easy to overlook because it is search operations rather than model operations:
+  </p>
+  <ul>
+    <li><strong>Indexer execution history</strong> in Azure AI Search — success/failure counts, per-document errors and warnings, and the item-level failure thresholds that decide whether an indexer run fails.</li>
+    <li><strong>Index size, document count and storage/vector quota</strong> against the service tier — a silently full index stops accepting documents.</li>
+    <li><strong>Freshness</strong> — change-detection policy and indexer schedule; stale grounding data produces confidently wrong answers.</li>
+    <li><strong>Relevance</strong> — measure it, do not assume it. Evaluate <strong>retrieval</strong> separately from generation with <em>document retrieval</em> and <em>relevance</em> evaluators; hybrid + semantic ranking is the benchmark-backed baseline.</li>
+    <li><strong>Grounding quality</strong> — the <em>groundedness</em> evaluator tells you whether answers are supported by the retrieved context. A groundedness drop with a healthy model usually means the <em>retrieval</em> broke, not the model.</li>
+  </ul>
+
+  <Callout type="tip" title="Diagnosing a RAG quality complaint">
+    <p>
+      Split the pipeline before you tune anything. <strong>Bad retrieval</strong> shows up as low
+      <em>retrieval</em>/<em>relevance</em> scores and can be fixed with chunking, hybrid search, semantic ranking or
+      filters. <strong>Bad generation</strong> shows up as low <em>groundedness</em> or <em>coherence</em> with good
+      retrieval, and is fixed with prompt changes, a better model or tighter instructions. Answering "improve the
+      prompt" to a retrieval problem is the classic wrong answer.
+    </p>
+  </Callout>
+
+  <h3 id="security">Security: identity, networking and credentials</h3>
+
+  <div class="table-wrap">
+    <table class="tbl t-blue">
+      <thead><tr><th>Control</th><th>What to configure</th><th>Why the exam cares</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>Keyless credentials</strong></td>
+          <td>Entra ID tokens via <code>DefaultAzureCredential</code>; disable local key auth on the resource</td>
+          <td>No secret to leak or rotate; access revoked by removing a role assignment</td>
+        </tr>
+        <tr>
+          <td><strong>Managed identity</strong></td>
+          <td>System- or user-assigned identity on the Foundry resource/project; grant it roles on connected resources</td>
+          <td>The step people forget — the connection exists but the identity is unauthorised</td>
+        </tr>
+        <tr>
+          <td><strong>Agent identity</strong></td>
+          <td>A dedicated Entra identity per agent; hosted agents get one automatically</td>
+          <td>Scoped, auditable access to external APIs and MCP servers without shared credentials</td>
+        </tr>
+        <tr>
+          <td><strong>Private networking</strong></td>
+          <td>Private endpoints, VNet integration, public access disabled. Prompt agents support private networking; hosted agents support BYO VNet with VM-isolated sessions</td>
+          <td>Data exfiltration and residency scenarios</td>
+        </tr>
+        <tr>
+          <td><strong>Role policies</strong></td>
+          <td>Least-privilege Foundry roles, custom roles where built-ins over-grant, Entra security groups rather than individuals</td>
+          <td>See the role table on the <a href={href('foundry-foundations')}>Foundations page</a></td>
+        </tr>
+        <tr>
+          <td><strong>Egress controls</strong> <span class="pill p-amber">preview</span></td>
+          <td>Allow-list of outbound destinations for hosted agents, set in the guardrail</td>
+          <td>Stops a compromised or manipulated agent calling out to anywhere</td>
+        </tr>
+        <tr>
+          <td><strong>Customer-managed keys</strong></td>
+          <td>Encryption with your own keys in Key Vault</td>
+          <td>Regulated-industry scenarios</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ================================================================= -->
+  <h2 id="rai"><span class="num">1.4</span> Implement responsible AI</h2>
+
+  <h3 id="guardrails">Guardrails and controls</h3>
+  <p>
+    A <strong>guardrail</strong> is a named collection of <strong>controls</strong>. Each control pairs three things: a
+    <strong>risk</strong> to detect, an <strong>intervention point</strong> to scan, and an <strong>action</strong> to
+    take. The classification models come from Azure AI Content Safety.
+  </p>
+
+  <Mermaid code={guardrailFlow} caption="Four intervention points. Tool call and tool response exist only for agents, and are in preview." />
+
+  <div class="table-wrap">
+    <table class="tbl t-orange">
+      <thead><tr><th>Risk</th><th>Models</th><th>Agents (preview)</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td>Hate · Sexual · Self-harm · Violence</td><td>✔</td><td>✔</td><td>Severity threshold: Off / Low / Medium / High. <strong>Low is the most restrictive</strong> (it flags low severity and above)</td></tr>
+        <tr><td><strong>User prompt attacks</strong> (jailbreak)</td><td>✔</td><td>✔</td><td>Prompt Shields — direct attacks in the user prompt</td></tr>
+        <tr><td><strong>Indirect attacks</strong> (XPIA)</td><td>✔</td><td>✔</td><td>Injection hidden in retrieved documents, tool output, web pages or images</td></tr>
+        <tr><td>Spotlighting <span class="pill p-amber">preview</span></td><td>✔</td><td><strong>✘</strong></td><td>Marks untrusted content so the model treats it as data, not instructions</td></tr>
+        <tr><td>Protected material for text / for code</td><td>✔</td><td>✔</td><td>Known copyrighted text and public-repository code</td></tr>
+        <tr><td>Groundedness <span class="pill p-amber">preview</span></td><td>✔</td><td><strong>✘</strong></td><td>Detects ungrounded output against supplied source content</td></tr>
+        <tr><td>PII <span class="pill p-amber">preview</span></td><td>✔</td><td>✔</td><td>Personal data in prompts or completions</td></tr>
+        <tr><td>Task adherence <span class="pill p-amber">preview</span></td><td>✔</td><td>✔</td><td>Is the agent still doing the job it was given?</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <Callout type="exam" title="Guardrail rules that get tested verbatim">
+    <ul style="margin-bottom:0">
+      <li><strong>Actions:</strong> models support <em>annotate</em> and <em>annotate and block</em>; agents support <strong>annotate and block only</strong>.</li>
+      <li><strong>Inheritance:</strong> an agent uses the guardrail <em>assigned to it</em>. If none is assigned it inherits its <strong>model deployment's</strong> guardrail — not the service default. An agentic guardrail <strong>fully overrides</strong> the model's.</li>
+      <li><strong>Default:</strong> models get <code>Microsoft.DefaultV2</code>.</li>
+      <li><strong>Turning filters off</strong> requires approval through the Limited Access <em>modified guardrails</em> review — you cannot simply disable them.</li>
+      <li>Guardrails apply to <strong>Foundry Models sold by Azure</strong>, except audio transcription models; and to agents built in <strong>Foundry Agent Service</strong>, not to every agent registered in the control plane.</li>
+      <li>Severity direction trips people up: <strong>High = most permissive</strong> (only the worst is blocked), <strong>Low = most restrictive</strong>.</li>
+    </ul>
+  </Callout>
+
+  <h3 id="evaluators">Responsible AI instrumentation</h3>
+  <p>
+    Guardrails are a runtime control. <strong>Evaluators</strong> are the measurement layer, and the outline names them
+    explicitly under responsible AI.
+  </p>
+
+  <div class="table-wrap">
+    <table class="tbl t-orange">
+      <thead><tr><th>Category</th><th>Examples</th><th>Answers the question</th></tr></thead>
+      <tbody>
+        <tr><td><strong>General quality</strong></td><td>Coherence, fluency</td><td>Is it well-formed language?</td></tr>
+        <tr><td><strong>RAG-specific</strong></td><td>Groundedness, relevance, retrieval</td><td>Is it supported by the sources, and did we retrieve the right ones?</td></tr>
+        <tr><td><strong>Safety and security</strong></td><td>Hate and unfairness, violence, sexual, self-harm, protected material, indirect attack</td><td>Is it harmful, or was it manipulated?</td></tr>
+        <tr><td><strong>Agent-specific</strong></td><td>Intent resolution, tool call accuracy, task adherence, task completion</td><td>Did the agent understand, pick the right tool, stay on task and finish?</td></tr>
+        <tr><td><strong>Custom</strong></td><td>Your domain rules, as code or as an LLM judge</td><td>Whatever "correct" means in your business</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>
+    "Detecting fabrications" in the outline maps to <strong>groundedness</strong>. Evaluations run at three lifecycle
+    stages: <strong>base model selection</strong> (benchmarks and leaderboards), <strong>pre-production</strong> (your
+    dataset, plus red teaming), and <strong>post-production</strong> (continuous, scheduled and alerted).
+    <strong>Cluster analysis</strong> groups evaluation failures so you can see the pattern instead of reading
+    individual rows.
+  </p>
+
+  <Callout type="warn" title="Playground evaluations are billed by default">
+    <p>
+      Evaluations in the agents playground are <strong>enabled by default for every Foundry project</strong> and billed
+      by consumption. If a scenario complains about unexpected observability cost, one legitimate answer is to deselect
+      the evaluators in the playground's metrics panel.
+    </p>
+  </Callout>
+
+  <h3 id="auditing">Auditing, provenance and approvals</h3>
+  <ul>
+    <li><strong>Trace logging</strong> — OpenTelemetry traces in Application Insights are the audit trail of what the agent decided and which tools it called. Retain them to match your compliance requirement.</li>
+    <li><strong>Provenance metadata</strong> — citations from retrieval tools, source grounding and confidence scores from Content Understanding, and content credentials (C2PA) on generated media. "Where did this answer come from?" must have an answer.</li>
+    <li><strong>Approval workflows</strong> — human-in-the-loop gates before sensitive tool calls. In Agent Framework this is an approval-required tool that pauses the workflow and emits a request for a decision; in Foundry workflows it is the <em>human in the loop</em> pattern.</li>
+    <li><strong>Azure Policy</strong> at resource scope for organisation-wide rules, and <strong>Azure Monitor alerts</strong> on safety signals.</li>
+  </ul>
+
+  <h3 id="oversight">Governing agent behaviour</h3>
+  <div class="table-wrap">
+    <table class="tbl t-orange">
+      <thead><tr><th>Lever</th><th>What it constrains</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Oversight mode</strong></td><td>How autonomous the agent is: fully interactive, autonomous with a turn limit, or approval-gated per action</td></tr>
+        <tr><td><strong>Tool-access controls</strong></td><td>Which tools the agent may call at all — curated centrally in a toolbox, with per-tool auth and policy</td></tr>
+        <tr><td><strong>Approval-required tools</strong></td><td>Specific irreversible actions (refunds, purchases, deletions) that pause for a human decision</td></tr>
+        <tr><td><strong>Turn and iteration limits</strong></td><td>Stops an autonomous loop running indefinitely without human involvement</td></tr>
+        <tr><td><strong>Guardrails on tool call / tool response</strong></td><td>Scans what the agent sends to a tool and what comes back — the XPIA surface</td></tr>
+        <tr><td><strong>Network egress controls</strong></td><td>Where a hosted agent may connect</td></tr>
+        <tr><td><strong>Scoped agent identity</strong></td><td>What the agent can authenticate to, and as whom (its own identity, or the user via OBO)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <Callout type="exam" title="Skill 1 rapid-fire review">
+    <ul style="margin-bottom:0">
+      <li>Quota is <strong>per subscription, per region, per model, per deployment type</strong>, measured in <strong>TPM</strong>.</li>
+      <li>TPM is estimated from <strong>prompt + <code>max_tokens</code></strong> at request time, not from billed tokens.</li>
+      <li><strong>429</strong> = rate limit or capacity. <strong>403</strong> = AI Gateway total token quota exhausted.</li>
+      <li>Global Standard is the default; Data Zone for US/EU/APAC residency; Provisioned for predictable latency; Batch for ~50% off asynchronous work.</li>
+      <li>Azure <strong>Owner/Contributor grant no data-plane access</strong>; developers need <strong>Foundry User</strong>.</li>
+      <li>Guardrail severity: <strong>Low is the most restrictive</strong>. Agents can only <strong>annotate and block</strong>.</li>
+      <li>An agent inherits its <strong>model deployment's</strong> guardrail unless one is assigned directly.</li>
+      <li>"Fabrications" → the <strong>groundedness</strong> evaluator. "Did it pick the right tool?" → <strong>tool call accuracy</strong>.</li>
+      <li>Red teaming uses <strong>PyRIT</strong>; tracing uses <strong>OpenTelemetry</strong> into <strong>Application Insights</strong>.</li>
+    </ul>
+  </Callout>
+</NoteLayout>

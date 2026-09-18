@@ -1,0 +1,445 @@
+---
+import NoteLayout from '../../layouts/NoteLayout.astro';
+import Callout from '../../components/Callout.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import { href } from '../../lib/urls';
+
+const clientMap = `
+flowchart TB
+  CRED["DefaultAzureCredential"] --> PC["AIProjectClient(endpoint, credential)"]
+  PC --> OA["get_openai_client()<br/>OpenAI-compatible surface"]
+  PC --> AG["project.agents<br/>create_version, list, get, delete"]
+  PC --> TEL["project.telemetry<br/>Application Insights connection"]
+  PC --> DS["datasets · indexes · evaluations<br/>connections · deployments"]
+
+  OA --> RESP["responses.create / stream / parse"]
+  OA --> CONV["conversations.create"]
+  OA --> FILES["files · vector_stores"]
+  OA --> IMG["images.generate / edit"]
+  OA --> EMB["embeddings.create"]
+`;
+
+const install = `# One package for the platform, one for identity.
+pip install "azure-ai-projects>=2.3.0" azure-identity
+
+# Optional, depending on what you touch:
+pip install azure-ai-evaluation          # evaluators
+pip install azure-search-documents       # Azure AI Search
+pip install azure-cognitiveservices-speech
+pip install azure-monitor-opentelemetry  # tracing
+
+# Authenticate locally before running anything.
+az login`;
+
+const clientSetup = `import os
+from azure.identity import DefaultAzureCredential
+from azure.ai.projects import AIProjectClient
+
+PROJECT_ENDPOINT = os.environ["FOUNDRY_PROJECT_ENDPOINT"]
+# https://<resource-name>.services.ai.azure.com/api/projects/<project-name>
+
+project = AIProjectClient(
+    endpoint=PROJECT_ENDPOINT,
+    credential=DefaultAzureCredential(),
+)
+
+openai = project.get_openai_client()`;
+
+const responsesBasics = `# 1. Simplest call
+r = openai.responses.create(model="gpt-5-mini", input="Define RAG in one sentence.")
+print(r.output_text)
+
+# 2. With roles, when you need a system instruction
+r = openai.responses.create(
+    model="gpt-5-mini",
+    input=[
+        {"role": "system", "content": "You answer only about Azure. Be concise."},
+        {"role": "user", "content": "What is a Foundry project?"},
+    ],
+)
+
+# 3. Chained turns without a conversation object
+first = openai.responses.create(model="gpt-5-mini", input="Summarise this contract.")
+second = openai.responses.create(
+    model="gpt-5-mini",
+    previous_response_id=first.id,
+    input="Now list the three biggest risks.",
+)
+
+# 4. Multi-turn with server-side state
+conversation = openai.conversations.create()
+openai.responses.create(conversation=conversation.id, model="gpt-5-mini", input="Book a room in Lisbon.")
+openai.responses.create(conversation=conversation.id, model="gpt-5-mini", input="Make it two nights.")
+
+# 5. Tuning parameters
+r = openai.responses.create(
+    model="gpt-5-mini",
+    input=prompt,
+    temperature=0,            # deterministic-ish; do not also tune top_p
+    max_output_tokens=800,    # also feeds the TPM rate-limit estimate
+)`;
+
+const streaming = `# Streaming improves perceived latency; the event types matter.
+with openai.responses.stream(model="gpt-5-mini", input="Write a haiku about Azure.") as stream:
+    for event in stream:
+        if event.type == "response.output_text.delta":
+            print(event.delta, end="", flush=True)
+        elif event.type == "response.error":
+            raise RuntimeError(event.error)
+
+    final = stream.get_final_response()
+
+print()
+print(final.usage.input_tokens, final.usage.output_tokens)`;
+
+const structured = `from pydantic import BaseModel
+from typing import Literal
+
+class Extraction(BaseModel):
+    customer: str
+    order_id: str
+    issue_type: Literal["delivery", "billing", "quality", "other"]
+    urgent: bool
+
+parsed = openai.responses.parse(
+    model="gpt-5-mini",
+    input=[{"role": "user", "content": email_text}],
+    text_format=Extraction,       # constrains generation to the schema
+)
+
+record = parsed.output_parsed     # a typed Extraction, not a string
+print(record.issue_type, record.urgent)`;
+
+const functionLoop = `import json
+
+TOOLS = [{
+    "type": "function",
+    "name": "get_order_status",
+    "description": "Look up the delivery status of an order by its id.",
+    "parameters": {
+        "type": "object",
+        "properties": {"order_id": {"type": "string"}},
+        "required": ["order_id"],
+        "additionalProperties": False,
+    },
+}]
+
+def get_order_status(order_id: str) -> dict:
+    return {"order_id": order_id, "status": "in transit", "eta": "2026-09-19"}
+
+response = openai.responses.create(
+    model="gpt-5-mini",
+    input="Where is order A-4471?",
+    tools=TOOLS,
+)
+
+# The model returns tool calls; YOUR code executes them and feeds results back.
+# Loop, because one turn can produce several calls or chain into more.
+while True:
+    calls = [item for item in response.output if item.type == "function_call"]
+    if not calls:
+        break
+
+    outputs = []
+    for call in calls:
+        args = json.loads(call.arguments)
+        result = get_order_status(**args)
+        outputs.append({
+            "type": "function_call_output",
+            "call_id": call.call_id,        # must match the call
+            "output": json.dumps(result),
+        })
+
+    response = openai.responses.create(
+        model="gpt-5-mini",
+        previous_response_id=response.id,
+        input=outputs,
+        tools=TOOLS,
+    )
+
+print(response.output_text)`;
+
+const builtInTools = `# File search over a Foundry-managed vector store
+file = openai.files.create(file=open("handbook.pdf", "rb"), purpose="assistants")
+store = openai.vector_stores.create(name="hr-handbook", file_ids=[file.id])
+
+r = openai.responses.create(
+    model="gpt-5-mini",
+    input="How many days of parental leave do contractors get?",
+    tools=[{"type": "file_search", "vector_store_ids": [store.id]}],
+)
+
+# Code interpreter: the model writes and runs code in a sandbox
+r = openai.responses.create(
+    model="gpt-5-mini",
+    input="Chart the monthly totals in this CSV and describe the trend.",
+    tools=[{"type": "code_interpreter"}],
+)
+
+# A remote MCP server as a tool
+r = openai.responses.create(
+    model="gpt-5-mini",
+    input="Which work items are assigned to me and still open?",
+    tools=[{
+        "type": "mcp",
+        "server_label": "azure-devops",
+        "server_url": "https://example.com/mcp",
+        "require_approval": "always",     # human gate before tool execution
+    }],
+)`;
+
+const agentLifecycle = `from azure.ai.projects.models import PromptAgentDefinition
+
+# Create (or update) an agent. Each call produces a new immutable VERSION.
+agent = project.agents.create_version(
+    agent_name="support-triage",
+    definition=PromptAgentDefinition(
+        model="gpt-5-mini",
+        instructions=(
+            "Triage incoming support requests. Classify severity, identify the "
+            "product area, and create a ticket only after confirming with the user."
+        ),
+        tools=[{"type": "file_search", "vector_store_ids": [store.id]}],
+    ),
+)
+print(agent.id, agent.name, agent.version)
+
+# Talk to it: get a client pre-bound to the agent.
+agent_openai = project.get_openai_client(agent_name="support-triage")
+conversation = agent_openai.conversations.create()
+
+reply = agent_openai.responses.create(
+    conversation=conversation.id,
+    input="Checkout has been throwing 500s for twenty minutes.",
+)
+print(reply.output_text)
+
+# Housekeeping
+for version in project.agents.list_versions(agent_name="support-triage"):
+    print(version.version, version.created_at)`;
+
+const evaluation = `from azure.ai.evaluation import (
+    GroundednessEvaluator, RelevanceEvaluator, CoherenceEvaluator, evaluate,
+)
+
+judge = {"azure_endpoint": AZURE_ENDPOINT, "azure_deployment": "gpt-5-mini"}
+
+results = evaluate(
+    data="golden.jsonl",   # rows of {query, context, response, ground_truth}
+    evaluators={
+        "groundedness": GroundednessEvaluator(judge),
+        "relevance": RelevanceEvaluator(judge),
+        "coherence": CoherenceEvaluator(judge),
+    },
+    azure_ai_project=PROJECT_ENDPOINT,   # publish results to the portal
+    output_path="./eval_results.json",
+)
+
+print(results["metrics"])
+assert results["metrics"]["groundedness.groundedness"] >= 4.0   # CI gate`;
+
+const tracing = `import os
+from azure.monitor.opentelemetry import configure_azure_monitor
+
+connection_string = project.telemetry.get_application_insights_connection_string()
+configure_azure_monitor(connection_string=connection_string)
+
+# Prompt and completion text is NOT recorded by default: it can contain
+# customer data. Opt in deliberately, and only where retention allows.
+os.environ["AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED"] = "true"
+
+# From here, model calls, tool calls and agent decisions appear as spans in
+# Application Insights and in the Foundry portal's tracing view.`;
+
+const search = `from azure.identity import DefaultAzureCredential
+from azure.search.documents import SearchClient
+from azure.search.documents.models import VectorizableTextQuery
+
+client = SearchClient(
+    endpoint="https://my-search.search.windows.net",
+    index_name="policies",
+    credential=DefaultAzureCredential(),   # keyless; needs a Search data-plane role
+)
+
+results = client.search(
+    search_text=question,                            # BM25
+    vector_queries=[VectorizableTextQuery(           # ANN, embedded by the index vectorizer
+        text=question, k_nearest_neighbors=50, fields="content_vector",
+    )],
+    query_type="semantic",                           # L2 rerank
+    semantic_configuration_name="default",
+    query_caption="extractive",
+    filter="department eq 'HR'",                     # text fields only
+    top=5,
+)`;
+---
+
+<NoteLayout
+  slug="sdk-deep-dive"
+  description="The Python code AI-103 expects you to read: AIProjectClient, the Responses API, conversations and streaming, structured outputs, the function-calling loop, built-in tools, agent versions, evaluation, tracing, Azure AI Search queries, and a classic-to-new migration map."
+  intro="AI-103 rarely asks you to write code from scratch, but it regularly shows you a snippet and asks what it does, what is missing, or what is wrong. This page collects the shapes worth recognising on sight."
+>
+  <Callout type="code-note" title="How to use this page">
+    <p>
+      Read for <strong>shape</strong>, not syntax. For each block, ask yourself: which client is this, what would break
+      if a line were removed, and which permission does it need? Those are the three angles the exam takes. Every sample
+      here uses <strong><code>azure-ai-projects</code> 2.x</strong> against a single project endpoint.
+    </p>
+  </Callout>
+
+  <!-- ================================================================= -->
+  <h2 id="setup">Setup and authentication</h2>
+
+  <CodeBlock code={install} lang="bash" label="Install" />
+  <CodeBlock code={clientSetup} lang="python" label="Python · client" />
+
+  <Mermaid code={clientMap} caption="What hangs off AIProjectClient. Most exam snippets are somewhere on this tree." />
+
+  <Callout type="exam" title="Four ways a setup snippet is made wrong">
+    <ol style="margin-bottom:0">
+      <li>The endpoint is the <strong>resource</strong> endpoint rather than the <strong>project</strong> endpoint — no <code>/api/projects/&lt;project&gt;</code> segment.</li>
+      <li><code>azure-ai-projects</code> <strong>1.x</strong> code (classic) mixed with 2.x — the two are not compatible.</li>
+      <li>An API key where the scenario says <strong>keyless</strong> — it should be <code>DefaultAzureCredential</code>.</li>
+      <li>Credentials are fine but the caller has no <strong>Foundry User</strong> role, so a valid token is still refused.</li>
+    </ol>
+  </Callout>
+
+  <!-- ================================================================= -->
+  <h2 id="responses">The Responses API</h2>
+
+  <CodeBlock code={responsesBasics} lang="python" label="Python · responses" />
+
+  <div class="table-wrap">
+    <table class="tbl t-green">
+      <thead><tr><th>Need</th><th>Use</th></tr></thead>
+      <tbody>
+        <tr><td>One-shot call</td><td><code>responses.create(model=..., input="...")</code></td></tr>
+        <tr><td>Follow-up without server state</td><td><code>previous_response_id=</code></td></tr>
+        <tr><td>Full multi-turn session</td><td><code>conversations.create()</code>, then pass <code>conversation=</code></td></tr>
+        <tr><td>Typed output</td><td><code>responses.parse(..., text_format=Model)</code></td></tr>
+        <tr><td>Token-by-token output</td><td><code>responses.stream(...)</code></td></tr>
+        <tr><td>Talk to a named agent</td><td><code>project.get_openai_client(agent_name="...")</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 id="streaming">Streaming</h3>
+  <CodeBlock code={streaming} lang="python" label="Python · streaming" />
+
+  <h3 id="structured">Structured outputs</h3>
+  <CodeBlock code={structured} lang="python" label="Python · structured output" />
+
+  <!-- ================================================================= -->
+  <h2 id="tools">Tools</h2>
+
+  <h3 id="functions">The function-calling loop</h3>
+  <p>
+    The single most important code shape in the exam. The model <em>decides</em>; your code <em>executes</em>; you feed
+    the result back keyed by <code>call_id</code>. Missing the loop, or missing the <code>call_id</code>, are the two
+    classic broken snippets.
+  </p>
+
+  <CodeBlock code={functionLoop} lang="python" label="Python · function calling" />
+
+  <Callout type="warn" title="Three failure modes in that loop">
+    <ul style="margin-bottom:0">
+      <li><strong>No loop.</strong> Handling only the first round means chained or parallel tool calls are dropped and the model never produces a final answer.</li>
+      <li><strong>Missing <code>call_id</code>.</strong> The service cannot match the output to the call, and the model sees an unanswered tool call.</li>
+      <li><strong>Tools omitted on the follow-up call.</strong> Pass <code>tools=</code> again so the model can still call them on the next round.</li>
+    </ul>
+  </Callout>
+
+  <h3 id="built-in">Built-in tools</h3>
+  <CodeBlock code={builtInTools} lang="python" label="Python · built-in tools" />
+
+  <!-- ================================================================= -->
+  <h2 id="agents">Agent lifecycle</h2>
+  <CodeBlock code={agentLifecycle} lang="python" label="Python · agents" />
+
+  <Callout type="code-note" title="Reading agent code correctly">
+    <ul style="margin-bottom:0">
+      <li><code>create_version</code> is both create <em>and</em> update: every call snapshots a new <strong>immutable version</strong>, which is what makes rollback and comparison possible.</li>
+      <li>The agent is addressed by <strong>name</strong>, not id, when binding a client to it.</li>
+      <li>A <strong>prompt agent</strong> is a <code>PromptAgentDefinition</code>. A <strong>hosted agent</strong> ships your container or .zip instead and calls the project endpoint from inside.</li>
+      <li>Calling the Responses API directly with inline <code>instructions</code> and <code>tools</code> and no agent resource is an <strong>ephemeral agent</strong>.</li>
+    </ul>
+  </Callout>
+
+  <!-- ================================================================= -->
+  <h2 id="evaluation">Evaluation</h2>
+  <CodeBlock code={evaluation} lang="python" label="Python · evaluation" />
+
+  <p>
+    The <code>data</code> file is JSON Lines with the columns each evaluator needs — typically
+    <code>query</code>, <code>context</code>, <code>response</code> and sometimes <code>ground_truth</code>.
+    AI-assisted evaluators need a <strong>judge model</strong> configured. Passing
+    <code>azure_ai_project</code> publishes the run to the portal so results are visible alongside traces.
+  </p>
+
+  <!-- ================================================================= -->
+  <h2 id="tracing">Tracing</h2>
+  <CodeBlock code={tracing} lang="python" label="Python · tracing" />
+
+  <Callout type="warn" title="Content recording is off by default — deliberately">
+    <p>
+      Traces capture the call tree without prompt and completion text unless you opt in. That default exists because
+      prompts routinely contain customer data. If a question asks why traces show spans but no prompt text, the answer
+      is the content-recording setting — and the follow-up consideration is whether your retention policy permits it.
+    </p>
+  </Callout>
+
+  <!-- ================================================================= -->
+  <h2 id="search-sdk">Azure AI Search from Python</h2>
+  <CodeBlock code={search} lang="python" label="Python · search" />
+
+  <Callout type="exam" title="What to look for in a search snippet">
+    <ul style="margin-bottom:0">
+      <li><code>search_text</code> alone = keyword only. <code>vector_queries</code> alone = vector only. <strong>Both = hybrid</strong>, merged with RRF.</li>
+      <li><code>query_type="semantic"</code> plus a <code>semantic_configuration_name</code> = semantic reranking. Without the configuration it fails.</li>
+      <li><code>VectorizableTextQuery</code> means the index has a <strong>vectorizer</strong> and embeds the query for you; <code>VectorizedQuery</code> means you supplied the vector yourself.</li>
+      <li><code>filter</code> applies to <strong>text fields only</strong>.</li>
+      <li>Keyless search needs a <strong>data-plane role</strong> on the search service, not just a control-plane one.</li>
+    </ul>
+  </Callout>
+
+  <!-- ================================================================= -->
+  <h2 id="migration">Classic to new: the migration map</h2>
+  <p>
+    Older samples, blog posts and practice questions use the classic shapes. Recognise them and know the replacement.
+  </p>
+
+  <div class="table-wrap">
+    <table class="tbl t-green">
+      <thead><tr><th>Classic (Agents v1 / Assistants)</th><th>Current (Agents v2 / Responses)</th></tr></thead>
+      <tbody>
+        <tr><td><code>AzureOpenAI(api_key=..., api_version="2024-xx-xx")</code></td><td><code>AIProjectClient(endpoint, credential).get_openai_client()</code></td></tr>
+        <tr><td><code>client.beta.assistants.create(...)</code></td><td><code>project.agents.create_version(agent_name, definition=PromptAgentDefinition(...))</code></td></tr>
+        <tr><td><code>client.beta.threads.create()</code></td><td><code>openai.conversations.create()</code></td></tr>
+        <tr><td><code>threads.messages.create(...)</code></td><td>Conversation <strong>items</strong>, or just <code>input=</code> on the response</td></tr>
+        <tr><td><code>threads.runs.create_and_poll(...)</code></td><td><code>openai.responses.create(conversation=...)</code> — no polling loop</td></tr>
+        <tr><td><code>chat.completions.create(messages=[...])</code></td><td><code>responses.create(input=[...])</code> (chat completions still exists for plain model calls)</td></tr>
+        <tr><td><code>run.required_action.submit_tool_outputs</code></td><td><code>function_call_output</code> items with a <code>call_id</code></td></tr>
+        <tr><td>Monthly <code>api-version</code> query parameters</td><td>Stable <code>/openai/v1/</code> routes</td></tr>
+        <tr><td><code>azure-ai-inference</code>, <code>azure-ai-generative</code>, <code>azure-ai-ml</code></td><td><code>azure-ai-projects</code> 2.x</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <Callout type="tip" title="A three-second triage for any snippet">
+    <p>
+      See <code>threads</code>, <code>runs</code>, <code>assistants</code>, <code>submit_tool_outputs</code> or an
+      <code>api_version</code> string? It is <strong>classic</strong>. See <code>AIProjectClient</code>,
+      <code>responses</code>, <code>conversations</code> or <code>create_version</code>? It is
+      <strong>current</strong>. If a question asks you to modernise code, that mapping is the whole answer.
+    </p>
+  </Callout>
+
+  <Callout type="note" title="Where to go next">
+    <p>
+      Pair this page with <a href={href('skill-2-generative-ai-agents')}>Skill 2</a> for the concepts behind each call,
+      and finish with <a href={href('exam-tips')}>Exam tips &amp; caveats</a> for the numbers and traps worth drilling
+      the night before.
+    </p>
+  </Callout>
+</NoteLayout>

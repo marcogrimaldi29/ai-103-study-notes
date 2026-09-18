@@ -1,0 +1,371 @@
+---
+import NoteLayout from '../../layouts/NoteLayout.astro';
+import Callout from '../../components/Callout.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import { href } from '../../lib/urls';
+
+const textRouting = `
+flowchart TD
+  Q["A text task arrives"] --> A{"Is it a solved,<br/>bounded NLP task?"}
+  A -- "Yes: PII, sentiment, language,<br/>key phrases, health, NER" --> L["Azure Language<br/>stable API · cheap · auditable<br/>containers available"]
+  A -- "No: bespoke schema, domain<br/>reasoning, house style" --> G["Generative prompting<br/>+ structured outputs"]
+  A -- "Translation" --> T{"What matters most?"}
+  T -- "Coverage, cost, documents,<br/>glossary control" --> TR["Azure Translator<br/>(+ Custom Translator)"]
+  T -- "Tone, context, mixed<br/>instructions in one pass" --> LLM["LLM-powered<br/>translation flow"]
+  L -.->|"gaps"| G
+  G -.->|"needs determinism"| L
+`;
+
+const speechFlow = `
+flowchart LR
+  MIC["Microphone"] --> STT["Speech to text<br/>(custom speech for<br/>jargon and accents)"]
+  STT --> AG["Agent / model<br/>reasoning + tools"]
+  AG --> TTS["Text to speech<br/>standard · HD · MAI · custom voice"]
+  TTS --> SPK["Speaker"]
+
+  MIC -.->|"or: one low-latency,<br/>speech-native pipeline"| VL["Voice Live API<br/>barge-in · avatars ·<br/>bring your own agent"]
+  VL -.-> SPK
+`;
+
+const structuredExtraction = `from pydantic import BaseModel
+from typing import Literal
+
+class ComplaintAnalysis(BaseModel):
+    summary: str
+    product: str
+    sentiment: Literal["positive", "neutral", "negative"]
+    topics: list[str]
+    contains_personal_data: bool
+    escalate: bool
+
+# One call replaces separate entity, topic, sentiment and summarisation calls —
+# and the schema guarantees the shape for downstream code.
+result = openai.responses.parse(
+    model="gpt-5-mini",
+    input=[
+        {"role": "system", "content":
+            "Analyse the customer complaint. Escalate only when there is a "
+            "regulatory, safety or contractual breach. Topics must come from: "
+            "billing, delivery, quality, support, privacy."},
+        {"role": "user", "content": complaint_text},
+    ],
+    text_format=ComplaintAnalysis,
+)
+analysis = result.output_parsed`;
+
+const languageService = `from azure.core.credentials import AzureKeyCredential
+from azure.ai.textanalytics import TextAnalyticsClient
+
+client = TextAnalyticsClient(endpoint=LANGUAGE_ENDPOINT, credential=AzureKeyCredential(KEY))
+
+# PII detection returns a redacted string plus per-entity detail and a
+# confidence score — deterministic and auditable, which a prompt is not.
+result = client.recognize_pii_entities(
+    documents=[transcript],
+    language="en",
+    categories_filter=["Person", "PhoneNumber", "Email", "CreditCardNumber"],
+)[0]
+
+print(result.redacted_text)
+for entity in result.entities:
+    print(entity.category, entity.text, round(entity.confidence_score, 2))`;
+
+const speechCode = `import azure.cognitiveservices.speech as speechsdk
+
+speech_config = speechsdk.SpeechConfig(endpoint=SPEECH_ENDPOINT)
+speech_config.speech_recognition_language = "en-GB"
+
+# A custom speech model handles product names, acronyms and accents that the
+# base model mis-transcribes. Point the config at your deployed endpoint id.
+speech_config.endpoint_id = "your-custom-speech-endpoint-id"
+
+recognizer = speechsdk.SpeechRecognizer(speech_config=speech_config)
+result = recognizer.recognize_once_async().get()
+
+# Synthesis: pick a voice by name; SSML gives control over prosody and style.
+speech_config.speech_synthesis_voice_name = "en-GB-SoniaNeural"
+synthesizer = speechsdk.SpeechSynthesizer(speech_config=speech_config)
+synthesizer.speak_text_async("Your order has shipped.").get()`;
+
+const ssml = `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis"
+       xmlns:mstts="https://www.w3.org/2001/mstts" xml:lang="en-GB">
+  <voice name="en-GB-SoniaNeural">
+    <mstts:express-as style="empathetic" styledegree="1.4">
+      I'm sorry your delivery was late.
+    </mstts:express-as>
+    <break time="400ms"/>
+    Your refund of <say-as interpret-as="currency">GBP 24.99</say-as>
+    has been issued. Reference
+    <say-as interpret-as="characters">AB1274</say-as>.
+    <prosody rate="-8%">Thank you for your patience.</prosody>
+  </voice>
+</speak>`;
+---
+
+<NoteLayout
+  slug="skill-4-text-analysis"
+  description="AI-103 Skill 4 (10–15%): extracting entities, topics, summaries and structured JSON with generative prompting or Azure Language, detecting sentiment, tone and sensitive content, translation with Azure Translator or LLM flows, and the full speech stack — speech to text, text to speech, custom speech, speech translation and the Voice Live API."
+  intro="Two halves that share one question: when is a Foundry Tool the right answer, and when should a prompt do the work? The exam tests that judgement far more than it tests API syntax."
+>
+  <div class="card">
+    <strong>Two objectives in this skill area:</strong>
+    <ul style="margin-bottom:0">
+      <li><a href="#text">4.1 Apply language model text analysis</a> — entities, topics, summaries, structured JSON, sentiment and tone, safety and sensitive content, translation, domain customisation</li>
+      <li><a href="#speech">4.2 Implement speech solutions</a> — speech to text and text to speech for agents, speech as an agent modality, custom speech, audio reasoning, speech translation</li>
+    </ul>
+  </div>
+
+  <!-- ================================================================= -->
+  <h2 id="text"><span class="num">4.1</span> Apply language model text analysis</h2>
+
+  <Mermaid code={textRouting} caption="The routing decision that underlies most Skill 4 questions." />
+
+  <h3 id="two-paths">Two ways to do everything, and how to choose</h3>
+  <div class="table-wrap">
+    <table class="tbl t-teal">
+      <thead><tr><th></th><th>Azure Language (Foundry Tool)</th><th>Generative prompting</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Output</strong></td><td>Fixed schema, category labels, <strong>confidence scores</strong>, character offsets</td><td>Whatever you define — free text or a JSON Schema</td></tr>
+        <tr><td><strong>Determinism</strong></td><td>High and versionable (you can pin the model version)</td><td>Variable; constrain with temperature 0 and structured outputs</td></tr>
+        <tr><td><strong>Cost at volume</strong></td><td>Low and predictable per document</td><td>Token-based; grows with prompt and content length</td></tr>
+        <tr><td><strong>Auditability</strong></td><td>Strong — offsets and scores per entity</td><td>Needs you to build it</td></tr>
+        <tr><td><strong>Flexibility</strong></td><td>Only what the service supports</td><td>Anything you can describe</td></tr>
+        <tr><td><strong>Data residency / offline</strong></td><td><strong>Containers</strong>, including disconnected environments</td><td>Cloud model call</td></tr>
+        <tr><td><strong>Best for</strong></td><td>PII redaction, language detection, sentiment at scale, health text, compliance pipelines</td><td>Bespoke schemas, domain reasoning, summarising to a house style, mixed tasks in one call</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <Callout type="exam" title="The deciding words">
+    <p>
+      <strong>"Redact before storage"</strong>, <strong>"must run on-premises"</strong>, <strong>"confidence score per
+      entity"</strong>, <strong>"regulatory evidence"</strong>, <strong>"millions of documents, cost per document
+      matters"</strong> → <strong>Azure Language</strong>. <strong>"Summarise in our compliance department's
+      format"</strong>, <strong>"extract these 9 bespoke fields"</strong>, <strong>"decide whether to escalate and
+      explain why"</strong> → <strong>generative prompting with structured outputs</strong>. When a scenario needs both
+      determinism and a bespoke schema over documents, the answer is usually
+      <strong>Content Understanding</strong> (see <a href={href('skill-5-information-extraction')}>Skill 5</a>).
+    </p>
+  </Callout>
+
+  <h3 id="azure-language">Azure Language capabilities</h3>
+  <div class="table-wrap">
+    <table class="tbl t-teal">
+      <thead><tr><th>Capability</th><th>Returns</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td><strong>PII detection</strong></td><td>Detected entities with categories, offsets and confidence, plus a <strong>redacted string</strong></td><td>Text, conversation and document variants. Synthetic-replacement anonymisation is in preview. Recent additions include date of birth, licence plate, sort code and VIN</td></tr>
+        <tr><td><strong>Named entity recognition</strong></td><td>People, places, organisations, quantities, dates and more</td><td><strong>Prebuilt NER</strong> for standard categories; <strong>custom NER</strong> to train your own categories from labelled text</td></tr>
+        <tr><td><strong>Sentiment analysis &amp; opinion mining</strong></td><td>Positive / neutral / negative with scores, per document <strong>and per sentence</strong>; opinion mining links opinions to targets</td><td>"The food was great but the service was slow" needs <strong>opinion mining</strong> to separate the two targets</td></tr>
+        <tr><td><strong>Key phrase extraction</strong></td><td>The main talking points as phrases</td><td>The lightweight "what is this about?" — closest thing to topic extraction in the service</td></tr>
+        <tr><td><strong>Language detection</strong></td><td>Language, ISO code, confidence</td><td>Route multilingual input before anything else</td></tr>
+        <tr><td><strong>Summarisation</strong></td><td><strong>Extractive</strong> (selected sentences) and <strong>abstractive</strong> (newly written), plus conversation summarisation with issue/resolution aspects</td><td>Abstractive summarisation is powered by fine-tuned <strong>Phi</strong> models</td></tr>
+        <tr><td><strong>Text analytics for health</strong></td><td>Clinical entities, relations, assertions and UMLS links</td><td>Available as a container</td></tr>
+        <tr><td><strong>Custom text classification</strong></td><td>Your own single- or multi-label categories</td><td>Train from labelled documents</td></tr>
+        <tr><td><strong>Conversational language understanding (CLU)</strong></td><td>Intents and entities from utterances</td><td>The successor to LUIS</td></tr>
+        <tr><td><strong>Question answering</strong></td><td>Answers from a curated knowledge base</td><td>Custom question answering over FAQs and documents</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <CodeBlock code={languageService} lang="python" label="Python · PII detection" />
+
+  <Callout type="note" title="Azure Language as an agent tool">
+    <p>
+      Azure Language exposes an <strong>MCP server</strong> <span class="pill p-amber">preview</span> so agents can call
+      NER, text analytics for health, CLU, custom question answering, language detection, sentiment, summarisation, key
+      phrase extraction and PII redaction as tools. It is reachable at
+      <code>https://&lt;resource&gt;.cognitiveservices.azure.com/language/mcp</code>, and there is a local MCP server you
+      can host yourself. Adding it needs a <strong>connection in the Foundry project</strong> so the agent can
+      authenticate. Note that network-secured Foundry projects can require publicly accessible MCP servers.
+    </p>
+  </Callout>
+
+  <h3 id="structured-json">Entities, topics, summaries and structured JSON from prompts</h3>
+  <p>
+    When the shape is bespoke, one prompt with a schema replaces several service calls — and is usually what the exam
+    means by "extract entities, topics, summaries, and structured JSON outputs by using generative prompting".
+  </p>
+
+  <CodeBlock code={structuredExtraction} lang="python" label="Python · structured extraction" />
+
+  <Callout type="tip" title="Why structured outputs beat asking for JSON">
+    <p>
+      "Respond in JSON" produces JSON most of the time; <strong>structured outputs constrain generation to the
+      schema</strong>, so types, enums and required fields are guaranteed and your code never has to strip a markdown
+      fence or retry a parse failure. If an exam option offers "instruct the model to return JSON" against "use
+      structured outputs / a response schema", the schema wins.
+    </p>
+  </Callout>
+
+  <h3 id="sentiment-safety">Sentiment, tone, safety and sensitive content</h3>
+  <div class="table-wrap">
+    <table class="tbl t-teal">
+      <thead><tr><th>Requirement</th><th>Use</th></tr></thead>
+      <tbody>
+        <tr><td>Positive / neutral / negative at document and sentence level, with scores</td><td><strong>Azure Language sentiment analysis</strong></td></tr>
+        <tr><td>Which aspect the opinion is about ("the food" vs "the service")</td><td><strong>Opinion mining</strong></td></tr>
+        <tr><td>Tone, emotion, frustration, urgency, politeness — nuance beyond three labels</td><td><strong>Generative prompting</strong>, ideally with an enum in a schema</td></tr>
+        <tr><td>Hate, sexual, self-harm, violence in content</td><td><strong>Content Safety / guardrails</strong> — a safety control, not a sentiment task</td></tr>
+        <tr><td>Personal or sensitive data in the text</td><td><strong>PII detection</strong> for redaction; the <strong>PII guardrail control</strong> <span class="pill p-amber">preview</span> to block at the model boundary</td></tr>
+        <tr><td>Jailbreak attempts in user input</td><td><strong>User prompt attack</strong> control (Prompt Shields)</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <Callout type="exam" title="Sentiment is not safety">
+    <p>
+      A classic distractor: a scenario about "detecting abusive messages in a community forum" offers sentiment
+      analysis. Negative sentiment is not harm. Abuse, hate and threats are <strong>Content Safety</strong> harm
+      categories. Conversely, "how do customers feel about the new pricing?" is sentiment, not a safety control.
+    </p>
+  </Callout>
+
+  <h3 id="translation">Translation</h3>
+  <div class="table-wrap">
+    <table class="tbl t-teal">
+      <thead><tr><th></th><th>Azure Translator</th><th>LLM-powered translation flow</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Coverage</strong></td><td>100+ languages, mature and consistent</td><td>Strong on major languages, weaker on low-resource ones</td></tr>
+        <tr><td><strong>Cost at volume</strong></td><td>Per character, low and predictable</td><td>Per token, higher</td></tr>
+        <tr><td><strong>Documents</strong></td><td><strong>Document Translation</strong> preserves layout and formatting</td><td>You rebuild the document yourself</td></tr>
+        <tr><td><strong>Terminology control</strong></td><td><strong>Custom Translator</strong> (trained on your bilingual data, referenced by <em>category ID</em>) and glossaries</td><td>Instructions and few-shot examples in the prompt</td></tr>
+        <tr><td><strong>Context and tone</strong></td><td>Sentence-level; limited awareness of surrounding context</td><td>Excellent — can preserve register, adapt tone, and translate plus summarise in one pass</td></tr>
+        <tr><td><strong>Choose it when</strong></td><td>High volume, documents, regulated terminology, predictable cost</td><td>Context and tone matter, or translation is one step in a larger reasoning task</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 id="domain">Customising outputs for domain tasks</h3>
+  <p>Escalating in cost and effort — the exam expects you to reach for the cheapest one that works:</p>
+  <ol class="steps">
+    <li><strong>Instructions and few-shot examples.</strong> Define the format, vocabulary and rules in the system prompt. Solves most "in our house style" requirements.</li>
+    <li><strong>Structured outputs.</strong> Lock the schema so downstream systems can rely on it.</li>
+    <li><strong>Grounding.</strong> Supply the domain's policies, glossary or reference documents through retrieval so the model uses your definitions rather than its priors.</li>
+    <li><strong>Custom models in Azure Language.</strong> Custom NER and custom text classification, trained on labelled data, when you need deterministic domain categories at scale. (Custom sentiment, custom text analytics for health and custom summarisation were retired in January 2025 in favour of generative approaches.)</li>
+    <li><strong>Custom Translator</strong> for domain terminology in translation.</li>
+    <li><strong>Fine-tuning a model.</strong> Last resort: highest cost and effort, needs both control-plane and data-plane permissions (only <strong>Foundry Owner</strong> has both), and can be evaluated on a <strong>Developer</strong> deployment type.</li>
+  </ol>
+
+  <!-- ================================================================= -->
+  <h2 id="speech"><span class="num">4.2</span> Implement speech solutions</h2>
+
+  <Mermaid code={speechFlow} caption="Two architectures: a classic STT → reason → TTS chain, or a single speech-native Voice Live pipeline." />
+
+  <h3 id="stt">Speech to text</h3>
+  <div class="table-wrap">
+    <table class="tbl t-teal">
+      <thead><tr><th>Mode</th><th>Use for</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Real-time</strong></td><td>Live conversation, dictation, agent voice input</td></tr>
+        <tr><td><strong>Batch transcription</strong></td><td>Large volumes of recorded audio in storage, asynchronous</td></tr>
+        <tr><td><strong>Fast transcription</strong></td><td>Quick synchronous transcription of a whole file</td></tr>
+        <tr><td><strong>Custom speech</strong></td><td>A model adapted to your <strong>domain vocabulary, product names, acronyms, accents or noisy audio</strong>. Deployed to its own endpoint; point <code>endpoint_id</code> at it</td></tr>
+        <tr><td><strong>Diarisation</strong></td><td>Who spoke when, in multi-speaker audio</td></tr>
+        <tr><td><strong>Language identification</strong></td><td>Detect the spoken language, including continuous switching</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <CodeBlock code={speechCode} lang="python" label="Python · speech SDK" />
+
+  <h3 id="tts">Text to speech</h3>
+  <div class="table-wrap">
+    <table class="tbl t-teal">
+      <thead><tr><th>Voice type</th><th>What it is</th><th>Access</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Standard neural voices</strong></td><td>Prebuilt, 100+ languages and locales; all neural voices are multilingual and fluent in their own language and English</td><td>Generally available</td></tr>
+        <tr><td><strong>HD voices</strong> (<code>DragonHDLatestNeural</code>)</td><td>Higher fidelity, accept a <code>temperature</code> for prosodic variation</td><td>Generally available</td></tr>
+        <tr><td><strong>MAI voices</strong> <span class="pill p-amber">preview</span></td><td>Ultra-fast, low-latency expressive TTS optimised for real-time Voice Live</td><td>Preview</td></tr>
+        <tr><td><strong>OpenAI voices</strong></td><td>OpenAI TTS voices available through Azure Speech</td><td>Generally available</td></tr>
+        <tr><td><strong>Custom neural voice</strong></td><td>A brand voice trained from your voice talent's recordings. <em>Lite</em> for proofs of concept; <em>pro</em> for studio-quality, multi-emotion, cross-lingual</td><td><strong>Limited Access</strong> — application plus recorded consent from the voice talent</td></tr>
+        <tr><td><strong>Personal voice</strong></td><td>A voice model from a short sample, in seconds, speaking close to 100 languages</td><td><strong>Limited Access</strong>. Outputs are <strong>watermarked</strong> for synthetic-speech detection</td></tr>
+        <tr><td><strong>TTS avatar</strong></td><td>Synthetic video of an avatar speaking; prebuilt or custom, real-time or batch</td><td>Custom avatar is Limited Access</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>
+    <strong>SSML</strong> is how you control delivery: voice selection, speaking styles, prosody, pauses, and how
+    numbers, dates, currency and character strings are spoken. Batch synthesis handles long-form text.
+  </p>
+
+  <CodeBlock code={ssml} lang="xml" label="SSML" />
+
+  <h3 id="voice-live">Speech as an agent modality: the Voice Live API</h3>
+  <p>
+    The chained architecture (STT → model → TTS) is easy to reason about but accumulates latency at every hop and loses
+    prosody. <strong>Voice Live</strong> is the speech-native alternative: one low-latency API for real-time voice
+    conversation, with interruption handling, optional avatars, function calling, and the ability to
+    <strong>bring your own agent</strong> from Agent Service or your own deployed model from Foundry Models.
+  </p>
+
+  <div class="table-wrap">
+    <table class="tbl t-teal">
+      <thead><tr><th></th><th>Chained STT → model → TTS</th><th>Voice Live API</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Latency</strong></td><td>Sum of every hop</td><td>Optimised end to end for real-time conversation</td></tr>
+        <tr><td><strong>Interruption / barge-in</strong></td><td>You implement it</td><td>Built in</td></tr>
+        <tr><td><strong>Prosody and emotion</strong></td><td>Lost at the text boundary</td><td>Preserved through the pipeline</td></tr>
+        <tr><td><strong>Control</strong></td><td>Full — swap any component</td><td>Configured through the API</td></tr>
+        <tr><td><strong>Choose when</strong></td><td>Asynchronous or batch audio, or you need a specific component</td><td>Live voice agents, phone-style experiences, avatars</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <Callout type="exam" title="Voice scenarios and their answers">
+    <ul style="margin-bottom:0">
+      <li>"Customers must be able to <strong>interrupt</strong> the assistant mid-sentence" → <strong>Voice Live</strong>.</li>
+      <li>"The assistant mis-hears our product names" → <strong>custom speech</strong> model.</li>
+      <li>"The assistant must sound like our brand ambassador" → <strong>custom neural voice</strong> (Limited Access, consent required).</li>
+      <li>"Give each user their own synthesised voice from a short sample" → <strong>personal voice</strong> (Limited Access, watermarked).</li>
+      <li>"Transcribe ten thousand archived call recordings overnight" → <strong>batch transcription</strong>, not real-time.</li>
+      <li>"Identify who said what in a meeting recording" → <strong>diarisation</strong>.</li>
+    </ul>
+  </Callout>
+
+  <h3 id="audio-reasoning">Multimodal reasoning from audio</h3>
+  <p>
+    Distinct from transcription: a multimodal model can take <strong>audio directly as input</strong> and reason over it
+    — answering questions about a recording, judging tone, or summarising a call without a separate transcription step.
+    Content Understanding also has an <strong>audio analyzer</strong> that transcribes and then applies your schema, and
+    its post-call analytics scenario is exactly this: transcribe, extract fields, generate a summary and a sentiment
+    classification in one pass.
+  </p>
+
+  <Callout type="note" title="Audio models and guardrails">
+    <p>
+      The guardrail system applies to Foundry Models sold by Azure <strong>except prompts and completions processed by
+      audio transcription models</strong>. If a scenario requires content moderation over voice input, apply the
+      guardrail to the <em>downstream</em> model or agent that consumes the transcript, not to transcription itself.
+    </p>
+  </Callout>
+
+  <h3 id="speech-translation">Speech translation</h3>
+  <div class="table-wrap">
+    <table class="tbl t-teal">
+      <thead><tr><th>Approach</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Speech translation (Speech SDK)</strong></td><td>Speech to translated text, to one or many target languages; also direct speech-to-speech</td></tr>
+        <tr><td><strong>Live Interpreter</strong></td><td>Continuously identifies the spoken language with <strong>no input language set</strong>, and delivers low-latency speech-to-speech translation in a natural voice that preserves the speaker's style. Needs <strong>personal voice</strong> access and a supporting region</td></tr>
+        <tr><td><strong>Custom translation in speech</strong></td><td>Integrates Custom Translator via a <strong>category ID</strong>; requires a <strong>multi-service resource</strong> for the full feature set</td></tr>
+        <tr><td><strong>LLM-powered flow</strong></td><td>Transcribe, then translate with a model when tone, context or a combined task matters</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <Callout type="exam" title="Skill 4 rapid-fire review">
+    <ul style="margin-bottom:0">
+      <li>Deterministic, auditable, containerisable, cheap at volume → <strong>Azure Language</strong>. Bespoke schema or reasoning → <strong>prompting + structured outputs</strong>.</li>
+      <li>Sentence-level sentiment plus the <em>target</em> of the opinion → <strong>opinion mining</strong>.</li>
+      <li>Summarisation is <strong>extractive</strong> (selected sentences) or <strong>abstractive</strong> (newly written, Phi-powered).</li>
+      <li>Custom sentiment, custom text analytics for health and custom summarisation were <strong>retired in January 2025</strong>.</li>
+      <li>Containers exist for sentiment, NER, PII, health, custom NER and summarisation; some run <strong>disconnected</strong>.</li>
+      <li>Translator for volume, documents and glossaries; <strong>Custom Translator</strong> for domain terminology via a <strong>category ID</strong>.</li>
+      <li><strong>Custom speech</strong> fixes recognition; <strong>custom neural voice</strong> changes how it sounds — both are different problems.</li>
+      <li>Custom neural voice, personal voice and custom avatar are <strong>Limited Access</strong>; personal voice output is <strong>watermarked</strong>.</li>
+      <li><strong>Voice Live</strong> for low-latency, interruptible voice agents with optional avatars.</li>
+      <li>Guardrails do <strong>not</strong> apply to audio transcription models.</li>
+    </ul>
+  </Callout>
+</NoteLayout>

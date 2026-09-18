@@ -1,0 +1,676 @@
+---
+import NoteLayout from '../../layouts/NoteLayout.astro';
+import Callout from '../../components/Callout.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import { href } from '../../lib/urls';
+
+const ragFlow = `
+flowchart LR
+  subgraph ING["Ingestion — offline"]
+    D["Source documents"] --> CH["Chunk<br/>+ enrich"] --> EMB["Embed"] --> IDX["Index<br/>text + vectors"]
+  end
+  subgraph RUN["Query time — online"]
+    Q["User question"] --> RET["Retrieve<br/>hybrid + semantic rerank"]
+    IDX --> RET
+    RET --> CTX["Top-k grounding<br/>chunks + citations"]
+    CTX --> P["Prompt:<br/>instructions + context + question"]
+    P --> M["Model"] --> ANS["Grounded answer<br/>with citations"]
+  end
+`;
+
+const agentLoop = `
+sequenceDiagram
+  autonumber
+  participant U as User
+  participant R as Agent runtime
+  participant M as Model
+  participant T as Tool
+
+  U->>R: responses.create(conversation, input)
+  R->>R: Guardrail — user input
+  R->>M: instructions + conversation items + tool schemas
+  M-->>R: tool_call(name, arguments)
+  R->>R: Guardrail — tool call (agents, preview)
+  R->>T: Invoke tool
+  T-->>R: Tool result
+  R->>R: Guardrail — tool response (agents, preview)
+  R->>M: Conversation + tool result
+  M-->>R: Final message
+  R->>R: Guardrail — output
+  R-->>U: Response + citations, persisted as items
+`;
+
+const multiAgent = `
+flowchart TB
+  subgraph SEQ["Sequential"]
+    A1["Extract"] --> A2["Validate"] --> A3["Summarise"]
+  end
+  subgraph CON["Concurrent"]
+    C0["Fan out"] --> C1["Legal"] & C2["Finance"] & C3["Technical"]
+    C1 & C2 & C3 --> C4["Aggregate"]
+  end
+  subgraph HAND["Handoff"]
+    H0["Triage"] -->|"transfers ownership"| H1["Refunds"]
+    H0 -->|"transfers ownership"| H2["Orders"]
+  end
+  subgraph TOOLS["Agent-as-tool"]
+    T0["Primary agent<br/>keeps ownership"] --> T1["Specialist<br/>returns a result"]
+    T1 --> T0
+  end
+`;
+
+const ragAgent = `from azure.identity import DefaultAzureCredential
+from azure.ai.projects import AIProjectClient
+from azure.ai.projects.models import PromptAgentDefinition
+
+project = AIProjectClient(
+    endpoint="https://my-foundry.services.ai.azure.com/api/projects/my-project",
+    credential=DefaultAzureCredential(),
+)
+
+# A prompt agent is pure configuration: model + instructions + tools.
+agent = project.agents.create_version(
+    agent_name="policy-assistant",
+    definition=PromptAgentDefinition(
+        model="gpt-5-mini",
+        instructions=(
+            "You are an HR policy assistant for Contoso. "
+            "Answer ONLY from the retrieved policy documents and always cite the "
+            "document name. If the documents do not cover the question, say so "
+            "and suggest contacting HR — never guess."
+        ),
+        tools=[
+            {
+                "type": "file_search",
+                "vector_store_ids": ["vs_hr_policies"],
+            }
+        ],
+    ),
+)
+print(agent.id, agent.name, agent.version)`;
+
+const functionTool = `# A function tool is a JSON Schema the model can choose to call.
+# The schema IS the prompt for the tool: names and descriptions decide
+# whether the model picks it correctly.
+create_ticket = {
+    "type": "function",
+    "name": "create_support_ticket",
+    "description": (
+        "Create a support ticket in ServiceNow. Use only after the user has "
+        "confirmed the summary. Do not use for questions that documentation answers."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string", "description": "Short one-line summary"},
+            "severity": {
+                "type": "string",
+                "enum": ["low", "medium", "high", "critical"],
+                "description": "Business impact, not user frustration",
+            },
+            "description": {"type": "string"},
+        },
+        "required": ["title", "severity", "description"],
+        "additionalProperties": False,
+    },
+}
+
+response = openai.responses.create(
+    model="gpt-5-mini",
+    input="Raise a high severity ticket: the checkout page is returning 500s.",
+    tools=[create_ticket],
+)
+
+for item in response.output:
+    if item.type == "function_call":
+        args = json.loads(item.arguments)
+        result = servicenow.create(**args)
+        # Feed the result back in, referencing the call id.
+        response = openai.responses.create(
+            model="gpt-5-mini",
+            previous_response_id=response.id,
+            input=[{
+                "type": "function_call_output",
+                "call_id": item.call_id,
+                "output": json.dumps(result),
+            }],
+        )
+print(response.output_text)`;
+
+const structuredOutput = `from pydantic import BaseModel
+
+class Ticket(BaseModel):
+    title: str
+    severity: str
+    affected_service: str
+    customer_impacting: bool
+
+# Structured outputs constrain generation to the schema, so downstream code
+# never has to parse free text or defend against a stray markdown fence.
+response = openai.responses.parse(
+    model="gpt-5-mini",
+    input=email_body,
+    text_format=Ticket,
+)
+ticket = response.output_parsed
+print(ticket.severity, ticket.customer_impacting)`;
+
+const evalCode = `from azure.ai.evaluation import (
+    GroundednessEvaluator, RelevanceEvaluator, evaluate,
+)
+
+model_config = {
+    "azure_endpoint": AZURE_ENDPOINT,
+    "azure_deployment": "gpt-5-mini",   # the judge model
+}
+
+results = evaluate(
+    data="golden_questions.jsonl",       # query, context, response, ground_truth
+    evaluators={
+        "groundedness": GroundednessEvaluator(model_config),  # catches fabrications
+        "relevance": RelevanceEvaluator(model_config),
+    },
+    azure_ai_project=PROJECT_ENDPOINT,   # publishes results to the portal
+)
+
+# Fail the CI job on regression rather than eyeballing a dashboard.
+assert results["metrics"]["groundedness.groundedness"] >= 4.0`;
+---
+
+<NoteLayout
+  slug="skill-2-generative-ai-agents"
+  description="AI-103 Skill 2 (30–35%): building generative applications on Foundry, RAG, prompt and hosted agents, tool schemas and function calling, toolboxes, multi-agent orchestration, approvals and safeguards, evaluation and error analysis, prompt engineering, model parameters and observability."
+  intro="The largest skill area, and the one that most rewards hands-on practice. Everything here hangs off two primitives: the Responses API and the agent loop. Learn those, and tools, memory, orchestration and evaluation all slot into place."
+>
+  <div class="card">
+    <strong>Three objectives in this skill area:</strong>
+    <ul style="margin-bottom:0">
+      <li><a href="#build">2.1 Build generative applications</a> — consuming models, RAG, workflows, evaluation, SDK integration</li>
+      <li><a href="#agents">2.2 Build agents</a> — roles and goals, tool schemas, retrieval and memory, tools, multi-agent orchestration, safeguards, monitoring</li>
+      <li><a href="#optimize">2.3 Optimise and operationalise</a> — prompt engineering, model parameters, reflection and self-critique, observability, multi-model orchestration</li>
+    </ul>
+  </div>
+
+  <!-- ================================================================= -->
+  <h2 id="build"><span class="num">2.1</span> Build generative applications by using Foundry</h2>
+
+  <h3 id="connect">Connecting an application to a Foundry project</h3>
+  <p>
+    This is an explicit exam objective, and the answer is short: one endpoint, one credential, one client.
+  </p>
+
+  <CodeBlock
+    code={`from azure.identity import DefaultAzureCredential
+from azure.ai.projects import AIProjectClient
+
+project = AIProjectClient(
+    endpoint="https://<resource>.services.ai.azure.com/api/projects/<project>",
+    credential=DefaultAzureCredential(),
+)
+openai = project.get_openai_client()          # plain model calls
+agent_client = project.get_openai_client(agent_name="policy-assistant")  # bound to an agent`}
+    lang="python"
+    label="Python · project client"
+  />
+
+  <Callout type="code-note" title="Things that must be exactly right">
+    <ul style="margin-bottom:0">
+      <li>The endpoint form is <code>https://&lt;resource&gt;.services.ai.azure.com/api/projects/&lt;project&gt;</code> — the <code>/api/projects/</code> segment is not optional.</li>
+      <li>Package is <strong><code>azure-ai-projects</code> 2.x</strong> (<code>pip install "azure-ai-projects&gt;=2.3.0" azure-identity</code>). 1.x is classic and incompatible.</li>
+      <li><code>DefaultAzureCredential</code> needs <code>az login</code> locally and a managed identity in Azure — plus a <strong>Foundry User</strong> role assignment. Missing the role is the usual cause of a 401/403 in a question.</li>
+      <li>For REST, the token scope is <code>https://ai.azure.com/.default</code> and routes live under <code>/openai/v1/</code>.</li>
+    </ul>
+  </Callout>
+
+  <h3 id="consume-models">Deploying and consuming models</h3>
+  <p>
+    Once a model is deployed, its <strong>deployment name</strong> is what you pass as <code>model=</code>. The same
+    call shape works across LLMs, small models, code models and multimodal models — which is exactly why the exam can
+    ask you to swap models without changing code.
+  </p>
+
+  <CodeBlock
+    code={`# Text
+r = openai.responses.create(model="gpt-5-mini", input="Explain RAG in two sentences.")
+
+# Multimodal: text + image in one input item
+r = openai.responses.create(
+    model="gpt-5",
+    input=[{
+        "role": "user",
+        "content": [
+            {"type": "input_text", "text": "What safety issues can you see on this site?"},
+            {"type": "input_image", "image_url": "https://example.com/site.jpg"},
+        ],
+    }],
+)
+
+# Streaming, for perceived latency
+with openai.responses.stream(model="gpt-5-mini", input=prompt) as stream:
+    for event in stream:
+        if event.type == "response.output_text.delta":
+            print(event.delta, end="")`}
+    lang="python"
+    label="Python · consuming models"
+  />
+
+  <h3 id="rag">Implementing retrieval-augmented generation</h3>
+
+  <Mermaid code={ragFlow} caption="RAG has two halves that fail independently: an offline ingestion pipeline and an online retrieval-and-generation path." />
+
+  <p>Three ways to do RAG in Foundry, in increasing order of control:</p>
+
+  <div class="table-wrap">
+    <table class="tbl t-magenta">
+      <thead><tr><th>Approach</th><th>How</th><th>Trade-off</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>File search tool</strong></td>
+          <td>Upload files to the project, create a vector store, attach the <code>file_search</code> tool</td>
+          <td>Fastest path; Foundry owns chunking, embedding and the vector store. Reuse a <strong>persistent</strong> vector store in production rather than creating one per run</td>
+        </tr>
+        <tr>
+          <td><strong>Azure AI Search tool</strong></td>
+          <td>Connect an existing index and attach the <code>azure_ai_search</code> tool; answers come back with inline citations</td>
+          <td>Full control of the index, filters, hybrid search and relevance. The index needs searchable/retrievable <code>Edm.String</code> fields and searchable <code>Collection(Edm.Single)</code> vector fields</td>
+        </tr>
+        <tr>
+          <td><strong>Foundry IQ knowledge base</strong></td>
+          <td>Define knowledge sources, group them into a knowledge base, point agents at it</td>
+          <td>Managed, permission-aware, reusable across agents; adds agentic retrieval with query planning</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <CodeBlock code={ragAgent} lang="python" label="Python · RAG agent" />
+
+  <Callout type="exam" title="The instructions are part of the RAG design">
+    <p>
+      Notice what the system instructions above do: restrict the answer to retrieved content, require citations, and
+      define the behaviour when the documents do not cover the question. Exam items about "the model invents policies
+      that do not exist" want <strong>grounding plus an explicit refusal instruction</strong>, measured with the
+      <strong>groundedness</strong> evaluator — not a lower temperature on its own.
+    </p>
+  </Callout>
+
+  <h3 id="workflows">Workflows, tool-augmented flows and multi-step reasoning</h3>
+  <p>
+    Foundry <strong>workflows</strong> <span class="pill p-amber">preview</span> orchestrate multiple agents in a
+    repeatable process, with branching, variables and human steps, authored in the portal or as YAML in VS Code. Three
+    starting templates map directly to the orchestration patterns:
+  </p>
+
+  <div class="table-wrap">
+    <table class="tbl t-magenta">
+      <thead><tr><th>Pattern</th><th>Behaviour</th><th>Typical use</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Human in the loop</strong></td><td>Asks the user a question and waits for input before continuing</td><td>Approval requests, clarifying questions</td></tr>
+        <tr><td><strong>Sequential</strong></td><td>Passes each agent's result to the next in a fixed order</td><td>Pipelines, staged processing, auditable approval chains</td></tr>
+        <tr><td><strong>Group chat</strong></td><td>Passes control between agents dynamically based on context or rules</td><td>Escalation, fallback, expert handoff</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>
+    For deterministic, long-running or event-driven business processes, <strong>Azure Logic Apps</strong> is the
+    complementary answer: Foundry hosts and grounds the agent, Logic Apps triggers it from events or schedules, waits
+    on long-running approvals and exposes connectors as tools.
+  </p>
+
+  <h3 id="evaluate">Evaluating models and applications</h3>
+  <p>
+    The outline calls out four things to evaluate for: <strong>fabrications, relevance, quality and safety</strong>.
+    Those map onto evaluator families directly.
+  </p>
+
+  <div class="table-wrap">
+    <table class="tbl t-magenta">
+      <thead><tr><th>Concern in the question</th><th>Evaluator</th></tr></thead>
+      <tbody>
+        <tr><td>"The answer states facts not in the source documents"</td><td><strong>Groundedness</strong></td></tr>
+        <tr><td>"The answer is true but does not address the question"</td><td><strong>Relevance</strong></td></tr>
+        <tr><td>"We retrieved the wrong documents"</td><td><strong>Retrieval</strong> / document retrieval</td></tr>
+        <tr><td>"The writing is rambling or incoherent"</td><td><strong>Coherence</strong>, <strong>fluency</strong></td></tr>
+        <tr><td>"Could it produce harmful content?"</td><td>Safety evaluators, plus the <strong>AI red teaming agent</strong> (PyRIT)</td></tr>
+        <tr><td>"Did the agent call the right tool with the right arguments?"</td><td><strong>Tool call accuracy</strong></td></tr>
+        <tr><td>"Did the agent understand what was asked?"</td><td><strong>Intent resolution</strong></td></tr>
+        <tr><td>"Did the agent finish the job and stay on task?"</td><td><strong>Task completion</strong>, <strong>task adherence</strong></td></tr>
+        <tr><td>"It must satisfy our own domain rule"</td><td><strong>Custom evaluator</strong></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <CodeBlock code={evalCode} lang="python" label="Python · evaluation" />
+
+  <Callout type="tip" title="Evaluation vocabulary that shows up in distractors">
+    <p>
+      <strong>Benchmarks</strong> compare candidate models on public or your own data — that is <em>model
+      selection</em>. <strong>Evaluations</strong> score your application's outputs against a dataset — that is
+      <em>pre-production</em>. <strong>Continuous evaluation</strong> samples live traffic and
+      <strong>scheduled evaluation</strong> re-runs a fixed dataset to detect drift — that is <em>post-production</em>.
+      <strong>Cluster analysis</strong> groups failures so you can see the pattern.
+    </p>
+  </Callout>
+
+  <!-- ================================================================= -->
+  <h2 id="agents"><span class="num">2.2</span> Build agents by using Foundry</h2>
+
+  <h3 id="agent-anatomy">Roles, goals, conversation tracking and tool schemas</h3>
+  <p>An agent definition is four decisions, and the exam tests each separately.</p>
+
+  <div class="table-wrap">
+    <table class="tbl t-magenta">
+      <thead><tr><th>Decision</th><th>Where it lives</th><th>What good looks like</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>Role and goal</strong></td>
+          <td><code>instructions</code></td>
+          <td>Persona, scope, tone, the boundaries of what it will answer, what to do when it cannot, and how to cite</td>
+        </tr>
+        <tr>
+          <td><strong>Model</strong></td>
+          <td><code>model</code> — the deployment name</td>
+          <td>Swappable without changing the rest of the definition</td>
+        </tr>
+        <tr>
+          <td><strong>Conversation tracking</strong></td>
+          <td>A <strong>conversation</strong> id per user session; or <code>previous_response_id</code> for a simple chain; or your own store</td>
+          <td>Server-side conversations are the default. Bring your own Cosmos DB when you must own the data</td>
+        </tr>
+        <tr>
+          <td><strong>Tool schemas</strong></td>
+          <td><code>tools</code> — JSON Schema per function, or built-in tool configs</td>
+          <td>Precise names, descriptions that say <em>when</em> to use and <em>when not to</em>, enums over free strings, <code>required</code> set honestly</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <Mermaid code={agentLoop} caption="One agent turn. The guardrail runs at up to four points, and everything the agent does is persisted as items on the conversation." />
+
+  <h3 id="function-calling">Function calling</h3>
+  <p>
+    Function calling is client-side: the model decides <em>that</em> a function should be called and with which
+    arguments; <strong>your code executes it</strong> and returns the result. That is why function calling cannot live
+    inside a toolbox — the execution happens on your side.
+  </p>
+
+  <CodeBlock code={functionTool} lang="python" label="Python · function tool" />
+
+  <Callout type="exam" title="Tool descriptions are prompt engineering">
+    <p>
+      "The agent calls the wrong tool" or "the agent calls the API when it should have answered from documentation" is
+      almost never fixed by changing the model. The fix is <strong>better tool names and descriptions</strong>,
+      <strong>enums instead of free-text parameters</strong>, and instructions that state the selection rule. At scale
+      (dozens of tools), the answer is <strong>tool search</strong> in a toolbox, which hides tools behind
+      <code>tool_search</code> and <code>call_tool</code> meta-tools so definitions stop consuming the context window.
+    </p>
+  </Callout>
+
+  <h3 id="structured">Structured outputs</h3>
+  <p>
+    When downstream code consumes the output, constrain generation to a schema rather than parsing prose. This is also
+    the answer to "produce structured JSON output" in Skill 4.
+  </p>
+
+  <CodeBlock code={structuredOutput} lang="python" label="Python · structured output" />
+
+  <h3 id="tools">Tools and toolboxes</h3>
+
+  <p>
+    A <strong>toolbox</strong> curates tools once and exposes them through a single managed
+    <strong>MCP-compatible endpoint</strong>, with central authentication, guardrails, observability and
+    <strong>versioning</strong>. Agents point at the toolbox, so you can add, remove or reconfigure tools — or promote a
+    new default version — <strong>without changing or redeploying agent code</strong>. Toolboxes are Foundry-homed but
+    not Foundry-bound: any MCP-compatible runtime (Agent Framework, LangGraph, your own code) can consume one.
+  </p>
+
+  <div class="table-wrap">
+    <table class="tbl t-magenta">
+      <thead><tr><th>Tool</th><th>Does</th><th>In a toolbox?</th></tr></thead>
+      <tbody>
+        <tr><td><strong>MCP</strong></td><td>Connect a remote Model Context Protocol server</td><td>✔</td></tr>
+        <tr><td><strong>Web search</strong></td><td>Public web results. Start here before Grounding with Bing</td><td>✔</td></tr>
+        <tr><td><strong>Azure AI Search</strong></td><td>Retrieve from your index with inline citations</td><td>✔</td></tr>
+        <tr><td><strong>File search</strong></td><td>Search project files and vector stores</td><td>✔</td></tr>
+        <tr><td><strong>Code interpreter</strong></td><td>Run code in a sandbox for data work and charts</td><td>✔</td></tr>
+        <tr><td><strong>OpenAPI</strong></td><td>Call any REST API from its spec</td><td>✔</td></tr>
+        <tr><td><strong>Agent-to-agent (A2A)</strong></td><td>Call another agent over the A2A protocol</td><td>✔</td></tr>
+        <tr><td><strong>Browser automation</strong></td><td>Drive a real browser</td><td>✔</td></tr>
+        <tr><td><strong>Fabric IQ / Work IQ</strong></td><td>Structured data in Fabric; Microsoft 365 work context</td><td>✔</td></tr>
+        <tr><td><strong>Tool search</strong> <span class="pill p-amber">preview</span></td><td>Surface only relevant tools at runtime</td><td>✔ (toolbox only)</td></tr>
+        <tr><td><strong>Skills</strong> <span class="pill p-amber">preview</span></td><td>Versioned, immutable multi-step workflows the agent invokes like a tool</td><td>✔ (toolbox only)</td></tr>
+        <tr><td><strong>Function calling</strong></td><td>Your own code, executed client-side</td><td><strong>✘</strong> — client-side execution</td></tr>
+        <tr><td><strong>Grounding with Bing</strong> / Bing Custom Search</td><td>Real-time public web with source attribution</td><td><strong>✘</strong></td></tr>
+        <tr><td><strong>Computer use</strong>, <strong>image generation</strong>, <strong>SharePoint</strong>, <strong>Fabric data agent</strong>, <strong>Azure Functions</strong></td><td>Direct integration only</td><td><strong>✘</strong></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <Callout type="warn" title="Grounding with Bing has compliance strings attached">
+    <p>
+      Grounding with Bing Search and Bing Custom Search are <strong>First Party Consumption Services</strong> governed by
+      the Grounding with Bing terms, <strong>not</strong> the Microsoft Data Protection Addendum. Data sent to them
+      <strong>flows outside the Azure compliance and geo boundary</strong>, and using them <strong>waives elevated
+      Government Community Cloud commitments</strong> including data sovereignty. They also cost extra. If a scenario
+      stresses data residency or sovereignty, Bing grounding is the wrong answer — and
+      <strong>Bing Custom Search</strong> is the one that restricts grounding to a chosen subset of the web.
+    </p>
+  </Callout>
+
+  <p><strong>Tools vs skills</strong> is a distinction the outline implies: tools define <em>what</em> an agent can do; skills define <em>how</em> it performs a multi-step task. Skills are versioned and immutable, and agents discover them automatically through MCP resources at startup.</p>
+
+  <h3 id="memory">Conversation memory</h3>
+  <CodeBlock
+    code={`# Server-side conversation: history is maintained for you.
+conversation = openai.conversations.create()
+
+r1 = openai.responses.create(conversation=conversation.id, input="Book me a room in Lisbon.")
+r2 = openai.responses.create(conversation=conversation.id, input="Make it two nights.")
+# r2 knows what "it" refers to.
+
+# Lightweight alternative: chain by response id, no conversation object.
+r1 = openai.responses.create(model="gpt-5-mini", input="Summarise this contract.")
+r2 = openai.responses.create(model="gpt-5-mini", previous_response_id=r1.id, input="Now list the risks.")`}
+    lang="python"
+    label="Python · conversation state"
+  />
+
+  <p>
+    <strong>Semantic memory</strong> is the layer above: a memory provider extracts durable facts and summaries from
+    conversations, stores them by <strong>scope</strong> (typically a stable user or tenant id your application owns)
+    and retrieves the relevant ones in later sessions. Extraction is <strong>asynchronous</strong> — if the next step
+    depends on a newly written memory, you must wait for it. Keep exact transcripts in a history provider if you need
+    complete records; memory deliberately stores facts, not the conversation.
+  </p>
+
+  <h3 id="orchestration">Multi-agent orchestration</h3>
+
+  <Mermaid code={multiAgent} caption="Four patterns. The one the exam most often distinguishes is handoff (ownership transfers) versus agent-as-tool (ownership is retained)." />
+
+  <div class="table-wrap">
+    <table class="tbl t-magenta">
+      <thead><tr><th>Pattern</th><th>Control flow</th><th>Use it when</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Sequential</strong></td><td>Fixed order, each output feeds the next</td><td>Deterministic pipelines, staged approvals, auditability</td></tr>
+        <tr><td><strong>Concurrent</strong></td><td>Fan out in parallel, then aggregate</td><td>Independent perspectives on the same input; latency matters</td></tr>
+        <tr><td><strong>Handoff</strong></td><td>An agent <strong>transfers ownership</strong> of the whole task; the receiver has full context; no central authority</td><td>Triage and routing to specialists, dynamic escalation</td></tr>
+        <tr><td><strong>Group chat</strong></td><td>Agents collaborate in a shared conversation, control passed by context or rules</td><td>Debate, review, fallback</td></tr>
+        <tr><td><strong>Magentic</strong></td><td>A manager agent dynamically coordinates specialists</td><td>Open-ended problems with no fixed plan</td></tr>
+        <tr><td><strong>Agent-as-tool</strong></td><td>A primary agent <strong>delegates a subtask</strong> and <strong>keeps ownership</strong>; the specialist returns a result</td><td>A specialist capability inside a larger task the primary agent still owns</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <Callout type="exam" title="Handoff vs agent-as-tool, stated plainly">
+    <ul style="margin-bottom:0">
+      <li><strong>Control flow:</strong> handoff passes control permanently; agent-as-tool returns control to the caller.</li>
+      <li><strong>Task ownership:</strong> the receiving agent owns the task after a handoff; the primary agent retains responsibility with agent-as-tool.</li>
+      <li><strong>Context:</strong> handoff gives the receiver the full conversation; agent-as-tool passes only what the primary chooses to share.</li>
+      <li>Scenario cue: "route the customer to the refunds specialist who then handles the case" → <strong>handoff</strong>. "Ask the translation agent to translate this paragraph, then carry on" → <strong>agent-as-tool</strong>.</li>
+    </ul>
+  </Callout>
+
+  <h3 id="safeguards">Autonomy, safeguards and approval controls</h3>
+  <p>
+    "Build autonomous or semi-autonomous workflows with safeguards and approval flow controls" is an objective in its
+    own right. The mechanisms:
+  </p>
+  <ul>
+    <li><strong>Approval-required tools</strong> — mark a tool so the workflow pauses and emits an approval request before it executes. This is the standard answer for refunds, purchases, deletions and anything irreversible.</li>
+    <li><strong>Autonomous mode with turn limits</strong> — let an agent proceed without the user for a bounded number of turns, so it cannot loop indefinitely.</li>
+    <li><strong>Human-in-the-loop request/response</strong> — a request port that pauses the workflow for free-form human input, not just approve/reject.</li>
+    <li><strong>Checkpointing</strong> — persist workflow state so an approval that arrives hours or days later can resume the run. Essential for long-running processes.</li>
+    <li><strong>Guardrails on tool call and tool response</strong> — scan what the agent sends to tools and what comes back.</li>
+    <li><strong>Scoped agent identity and egress controls</strong> — limit what the agent can reach at all.</li>
+  </ul>
+
+  <CodeBlock
+    code={`from typing import Annotated
+from agent_framework import tool
+
+# The workflow pauses and emits an approval request before this ever runs.
+@tool(approval_mode="always_require")
+def process_refund(order_number: Annotated[str, "Order number to refund"]) -> str:
+    """Process a refund for the given order."""
+    return f"Refund processed for {order_number}."`}
+    lang="python"
+    label="Python · approval gate"
+  />
+
+  <h3 id="agent-monitoring">Monitoring agents and error analysis</h3>
+  <ul>
+    <li><strong>Tracing</strong> shows every model call, tool invocation and decision in one timeline — the only practical way to debug "why did it do that?".</li>
+    <li><strong>Agent evaluators</strong> — intent resolution, tool call accuracy, task adherence, task completion — turn behaviour into numbers.</li>
+    <li><strong>Monitoring dashboards</strong> track latency, token consumption, error rates and quality scores in production.</li>
+    <li><strong>Cluster analysis</strong> groups failing evaluation cases so you fix a class of problem rather than one row.</li>
+    <li><strong>Agent optimizer</strong> <span class="pill p-amber">preview</span> evaluates behaviour and automatically generates better instructions, skills, tool descriptions and model selections.</li>
+  </ul>
+
+  <Callout type="tip" title="Error analysis, in the order that works">
+    <p>
+      Open the trace. Did it <strong>misunderstand</strong> (intent resolution low) → fix instructions. Did it pick the
+      <strong>wrong tool</strong> (tool call accuracy low) → fix tool names, descriptions and schemas. Did the
+      <strong>tool fail or return junk</strong> → fix the integration, not the prompt. Did it have the right data and
+      still answer badly (groundedness low) → fix the prompt or the model. Did it <strong>stop early</strong> (task
+      completion low) → check turn limits, token limits and instructions.
+    </p>
+  </Callout>
+
+  <!-- ================================================================= -->
+  <h2 id="optimize"><span class="num">2.3</span> Optimise and operationalise</h2>
+
+  <h3 id="prompting">Prompt engineering</h3>
+  <p>Techniques the exam names, and what each is actually for:</p>
+
+  <div class="table-wrap">
+    <table class="tbl t-magenta">
+      <thead><tr><th>Technique</th><th>What it does</th><th>Reach for it when</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Clear system instructions</strong></td><td>Sets persona, scope, tone, refusal behaviour and output contract</td><td>Always — it is the highest-leverage change available</td></tr>
+        <tr><td><strong>Few-shot examples</strong></td><td>Demonstrates the format and edge cases</td><td>Output shape or style is hard to describe but easy to show</td></tr>
+        <tr><td><strong>Chain of thought</strong></td><td>Asks for reasoning steps before the answer</td><td>Multi-step reasoning. Note: reasoning models do this internally — prompting them to "think step by step" adds little</td></tr>
+        <tr><td><strong>Grounding / context injection</strong></td><td>Puts retrieved facts in the prompt</td><td>Anything factual about private or recent data</td></tr>
+        <tr><td><strong>Structured outputs</strong></td><td>Constrains generation to a JSON Schema</td><td>Machine-consumed output — more reliable than "respond in JSON"</td></tr>
+        <tr><td><strong>Delimiters and spotlighting</strong></td><td>Marks untrusted content as data rather than instructions</td><td>Any prompt containing retrieved or user-supplied content — the XPIA defence</td></tr>
+        <tr><td><strong>Prompt caching</strong></td><td>Reuses a stable prefix across calls</td><td>Long, unchanging system prompts at volume — a cost and latency lever</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 id="parameters">Model parameters</h3>
+  <div class="table-wrap">
+    <table class="tbl t-magenta">
+      <thead><tr><th>Parameter</th><th>Effect</th><th>Guidance</th></tr></thead>
+      <tbody>
+        <tr><td><code>temperature</code></td><td>Randomness of sampling. 0 is near-deterministic; higher is more varied</td><td>Low for extraction, classification and RAG; higher for creative copy</td></tr>
+        <tr><td><code>top_p</code></td><td>Nucleus sampling — restricts to the top probability mass</td><td><strong>Tune one of temperature or top_p, not both</strong></td></tr>
+        <tr><td><code>max_output_tokens</code></td><td>Caps the response length</td><td>Also feeds the <strong>TPM rate-limit estimate</strong>, so an inflated value causes needless 429s</td></tr>
+        <tr><td><code>frequency_penalty</code></td><td>Discourages repeating the same tokens</td><td>Fixes visible repetition</td></tr>
+        <tr><td><code>presence_penalty</code></td><td>Encourages introducing new topics</td><td>Fixes a model that keeps circling one idea</td></tr>
+        <tr><td><code>stop</code></td><td>Sequences that end generation</td><td>Structured or templated output</td></tr>
+        <tr><td><code>seed</code></td><td>Best-effort reproducibility</td><td>Testing and evaluation runs</td></tr>
+        <tr><td><code>reasoning effort</code></td><td>How long a reasoning model thinks</td><td>Trades latency and cost for accuracy</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <Callout type="exam" title="Determinism questions have a standard answer">
+    <p>
+      "Responses vary between identical runs; we need consistency for a compliance workflow" →
+      <strong>temperature 0</strong> (or very low), optionally a <code>seed</code>, plus
+      <strong>structured outputs</strong> to lock the shape. Temperature 0 is not a guarantee of identical text —
+      "best effort", not "reproducible" — so if the question demands a stable <em>schema</em>, structured outputs is the
+      stronger answer.
+    </p>
+  </Callout>
+
+  <h3 id="reflection">Reflection, chain-of-thought evaluation and self-critique</h3>
+  <p>
+    An explicit objective. These are patterns you implement, not switches you flip:
+  </p>
+  <ul>
+    <li><strong>Self-critique</strong> — the model produces an answer, then a second pass criticises it against explicit criteria and revises. Costs an extra call or two; measurably improves quality on hard tasks.</li>
+    <li><strong>Reflection loop</strong> — generate → evaluate → revise, repeated until a quality bar is met or an iteration cap is hit. <strong>Always set the cap.</strong></li>
+    <li><strong>Chain-of-thought evaluation</strong> — score the reasoning trace, not just the final answer, to find where a multi-step task went wrong.</li>
+    <li><strong>LLM-as-judge</strong> — a separate model (the judge, configured in the evaluator) scores outputs. This is how the built-in AI-assisted evaluators work.</li>
+    <li><strong>Agent optimizer</strong> <span class="pill p-amber">preview</span> — the managed version: it evaluates behaviour and rewrites instructions and tool descriptions for you.</li>
+  </ul>
+
+  <h3 id="observability">Observability: tracing, tokens, safety, latency</h3>
+  <CodeBlock
+    code={`from azure.monitor.opentelemetry import configure_azure_monitor
+
+# Traces go to the project's Application Insights connection.
+connection_string = project.telemetry.get_application_insights_connection_string()
+configure_azure_monitor(connection_string=connection_string)
+
+# Opt in to recording prompt and completion content in traces.
+# Off by default: the content may contain customer data.
+os.environ["AZURE_TRACING_GEN_AI_CONTENT_RECORDING_ENABLED"] = "true"`}
+    lang="python"
+    label="Python · tracing setup"
+  />
+
+  <div class="table-wrap">
+    <table class="tbl t-magenta">
+      <thead><tr><th>Signal</th><th>Tells you</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Traces</strong> (OpenTelemetry spans)</td><td>The full call tree: model calls, tool calls, retrieval, decisions, errors</td></tr>
+        <tr><td><strong>Token analytics</strong></td><td>Input/output tokens per call and per user — the cost driver, and the input to right-sizing</td></tr>
+        <tr><td><strong>Latency breakdown</strong></td><td>Which span is slow: retrieval, a tool, or generation. Usually retrieval or a slow tool, not the model</td></tr>
+        <tr><td><strong>Safety signals</strong></td><td>Guardrail annotations and blocks, by category and severity</td></tr>
+        <tr><td><strong>Quality scores</strong></td><td>Continuous and scheduled evaluation results over time</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 id="multi-model">Orchestrating multiple models and hybrid systems</h3>
+  <p>
+    The last bullet of the skill: "orchestrate multiple models, flows, or hybrid LLM and rules engines". The patterns
+    worth naming:
+  </p>
+  <ul>
+    <li><strong>Model routing / cascading</strong> — a cheap small model handles the easy majority and escalates hard cases to a larger model. The standard answer to "cut cost without losing quality".</li>
+    <li><strong>Specialist models per stage</strong> — embeddings for retrieval, a reasoning model for planning, a fast model for the user-facing reply.</li>
+    <li><strong>Hybrid LLM + rules</strong> — deterministic business rules decide anything regulated or numeric; the model handles language. If a question involves eligibility, pricing or compliance thresholds, <strong>the rules engine decides and the model explains</strong> — never the reverse.</li>
+    <li><strong>Gateway-level orchestration</strong> — Azure API Management as an AI gateway for load balancing across deployments and regions, token limits and quota enforcement.</li>
+  </ul>
+
+  <Callout type="exam" title="Skill 2 rapid-fire review">
+    <ul style="margin-bottom:0">
+      <li>Prompt agent = declarative and fully managed. Hosted agent = your container, plus container compute cost. Responses API direct = ephemeral, no agent resource.</li>
+      <li><strong>Conversations</strong> hold <strong>items</strong>; <code>previous_response_id</code> is the lightweight alternative.</li>
+      <li><strong>Function calling executes client-side</strong>, which is why it cannot live in a toolbox.</li>
+      <li>Toolbox = one MCP endpoint, central auth, guardrails, versioning; update tools without redeploying agents.</li>
+      <li><strong>Tool search</strong> solves "too many tools inflate the context window and confuse selection".</li>
+      <li>Handoff transfers ownership; agent-as-tool returns control.</li>
+      <li>Irreversible actions → <strong>approval-required tools</strong> plus <strong>checkpointing</strong> for long waits.</li>
+      <li>Fabrication → groundedness. Wrong tool → tool call accuracy. Misunderstood → intent resolution.</li>
+      <li>Tune <strong>temperature or top_p, not both</strong>; an inflated <code>max_output_tokens</code> causes 429s.</li>
+      <li>Grounding with Bing sends data <strong>outside the Azure compliance boundary</strong>.</li>
+    </ul>
+  </Callout>
+</NoteLayout>

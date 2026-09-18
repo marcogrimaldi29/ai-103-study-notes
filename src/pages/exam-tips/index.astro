@@ -1,0 +1,359 @@
+---
+import NoteLayout from '../../layouts/NoteLayout.astro';
+import Callout from '../../components/Callout.astro';
+import Mermaid from '../../components/Mermaid.astro';
+import { SITE } from '../../data/site';
+import { href } from '../../lib/urls';
+
+const groundingTree = `
+flowchart TD
+  A["The agent needs information<br/>it does not have"] --> B{"Where does it live?"}
+  B -- "A handful of files<br/>you upload" --> C["File search tool<br/>+ vector store"]
+  B -- "An enterprise index<br/>with filters and permissions" --> D["Azure AI Search tool"]
+  B -- "Several sources behind<br/>one reusable layer" --> E["Foundry IQ knowledge base"]
+  B -- "The public web" --> F{"Compliance boundary<br/>matters?"}
+  F -- "Yes" --> G["Do NOT use Bing grounding"]
+  F -- "No" --> H["Web search tool, or<br/>Grounding with Bing"]
+  B -- "SharePoint / Microsoft 365" --> I["SharePoint tool / Work IQ"]
+  B -- "Structured business data" --> J["Fabric IQ / Fabric data agent"]
+  B -- "A live system with an API" --> K["OpenAPI tool or<br/>MCP server"]
+`;
+
+const modeTree = `
+flowchart TD
+  A["Extract from documents"] --> B{"One file, or several<br/>reasoned about together?"}
+  B -- "One file" --> C["Content Understanding<br/>STANDARD mode"]
+  B -- "Several, cross-validated" --> D["Content Understanding<br/>PRO mode (preview, documents only)"]
+  A --> E{"Is it a known form type<br/>with a prebuilt model?"}
+  E -- "Yes, stable high volume" --> F["Document Intelligence"]
+  E -- "Bespoke schema or<br/>mixed modalities" --> C
+`;
+---
+
+<NoteLayout
+  slug="exam-tips"
+  description="AI-103 exam tips and caveats: key numbers, master decision trees, the naming and rebrand traps that cost marks, the most commonly confused service pairs, a scenario-to-answer lookup table, question-format tactics and a pre-exam checklist."
+  intro="The final-review page. Everything here is a fact that changes an answer, a boundary between two services that look alike, or a trap that has a predictable wrong option attached to it."
+>
+  <Callout type="tip" title="How to use this page">
+    <p>
+      Do not read it first. Work the five skill pages, then come back here in the last week and drill until you can
+      finish each row of the lookup table before reading the answer column. If a row surprises you, that is your signal
+      to re-read the section it links to.
+    </p>
+  </Callout>
+
+  <!-- ================================================================= -->
+  <h2 id="numbers">Numbers worth memorising</h2>
+
+  <div class="stat-grid">
+    <div class="stat" style="--accent:var(--s1)"><div class="s-num">700</div><div class="s-lbl">Pass mark, scaled to 1000</div></div>
+    <div class="stat" style="--accent:var(--s2)"><div class="s-num">30–35%</div><div class="s-lbl">Skill 2 — the largest area</div></div>
+    <div class="stat" style="--accent:var(--s3)"><div class="s-num">25–30%</div><div class="s-lbl">Skill 1 — the second largest</div></div>
+    <div class="stat" style="--accent:var(--s5)"><div class="s-num">1–30</div><div class="s-lbl">Skills allowed in a skillset</div></div>
+  </div>
+
+  <div class="table-wrap">
+    <table class="tbl t-amber">
+      <thead><tr><th>Number</th><th>What it is</th></tr></thead>
+      <tbody>
+        <tr><td><strong>700 / 1000</strong></td><td>Score required to pass</td></tr>
+        <tr><td><strong>1 year</strong></td><td>Certification validity; renewal is a free online assessment on Microsoft Learn</td></tr>
+        <tr><td><strong>{SITE.skillsMeasured}</strong></td><td>The skills-measured revision these notes target</td></tr>
+        <tr><td><strong>25–30 / 30–35 / 10–15 / 10–15 / 10–15</strong></td><td>Weightings for Skills 1 to 5</td></tr>
+        <tr><td><strong>1–10</strong></td><td>Images per image-generation request (<code>n</code>)</td></tr>
+        <tr><td><strong>1–30</strong></td><td>Skills allowed in an Azure AI Search skillset (3–5 typical)</td></tr>
+        <tr><td><strong>200</strong></td><td>Maximum Content Understanding classification categories</td></tr>
+        <tr><td><strong>~50%</strong></td><td>Cost saving from Batch deployment types</td></tr>
+        <tr><td><strong>1–10 seconds</strong></td><td>Window over which RPM is evaluated — which is why bursts throttle</td></tr>
+        <tr><td><strong>31 March 2027</strong></td><td>Retirement date for Agents (classic)</td></tr>
+        <tr><td><strong>US / EU / APAC</strong></td><td>The three Data Zones</td></tr>
+        <tr><td><strong>0 to 1</strong></td><td>Content Understanding confidence score range</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ================================================================= -->
+  <h2 id="rename">The rebrand traps</h2>
+
+  <p>
+    More marks are lost to naming than to concepts on this exam, because the platform renamed almost everything while
+    most study material did not.
+  </p>
+
+  <div class="table-wrap">
+    <table class="tbl t-magenta">
+      <thead><tr><th>If you read…</th><th>Think…</th><th>Trap</th></tr></thead>
+      <tbody>
+        <tr><td>Azure AI Foundry / Azure AI Studio</td><td><strong>Microsoft Foundry</strong></td><td>Same thing; do not treat them as different products</td></tr>
+        <tr><td>Azure AI Services / Cognitive Services</td><td><strong>Foundry Tools</strong></td><td>Roles starting with <em>Cognitive Services</em> are still the wrong ones to assign for Foundry</td></tr>
+        <tr><td>Assistants API, threads, runs, assistants</td><td><strong>Responses API, conversations, responses, agent versions</strong></td><td>Classic agents retire 31 March 2027 — never the answer for a <em>new</em> build</td></tr>
+        <tr><td>Content filters / RAI policy</td><td><strong>Guardrails</strong> and their <strong>controls</strong></td><td>—</td></tr>
+        <tr><td>Azure AI User / Owner / Account Owner / Project Manager</td><td><strong>Foundry</strong> User / Owner / Account Owner / Project Manager</td><td>Role IDs and permissions are unchanged; only the display names moved</td></tr>
+        <tr><td>Hub + Azure OpenAI + Azure AI Services</td><td><strong>One Foundry resource with projects</strong></td><td>A hub is still required for open-source models, managed compute and prompt flow</td></tr>
+        <tr><td><code>azure-ai-inference</code>, <code>azure-ai-generative</code>, <code>azure-ai-ml</code></td><td><strong><code>azure-ai-projects</code> 2.x</strong></td><td>2.x and 1.x are incompatible</td></tr>
+        <tr><td>Azure AI Developer role</td><td><strong>Not a Foundry role</strong></td><td>Despite the name, it is scoped to AML workspaces and hubs</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ================================================================= -->
+  <h2 id="confusions">Service pairs people confuse</h2>
+
+  <div class="table-wrap">
+    <table class="tbl t-violet">
+      <thead><tr><th>This…</th><th>…vs this</th><th>The deciding difference</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Prompt agent</strong></td><td>Hosted agent</td><td>Declarative config vs your own container. Hosted adds <strong>container compute cost</strong> and custom orchestration</td></tr>
+        <tr><td><strong>Hosted agent</strong></td><td>Ephemeral agent (Responses API direct)</td><td>Hosted is a Foundry resource with an endpoint; ephemeral has <strong>no agent resource</strong> — the definition lives in your code</td></tr>
+        <tr><td><strong>File search</strong></td><td>Azure AI Search tool</td><td>Foundry-managed vector store vs your index with <strong>filters, permissions, relevance tuning</strong></td></tr>
+        <tr><td><strong>Azure AI Search</strong></td><td>Foundry IQ</td><td>The index vs the managed, multi-source, permission-aware knowledge layer on top of it</td></tr>
+        <tr><td><strong>Handoff</strong></td><td>Agent-as-tool</td><td>Ownership transfers permanently vs control returns to the caller</td></tr>
+        <tr><td><strong>Function calling</strong></td><td>MCP / OpenAPI tool</td><td>Executed <strong>client-side by your code</strong> vs invoked by the service. Only the latter can live in a toolbox</td></tr>
+        <tr><td><strong>Content Understanding</strong></td><td>Document Intelligence</td><td>Generative, schema-described, multimodal, markdown-out vs trained prebuilt/custom document models</td></tr>
+        <tr><td><strong>Content Understanding</strong></td><td>Multimodal model prompt</td><td>Confidence scores + source grounding + a fixed schema vs free-form reasoning</td></tr>
+        <tr><td><strong>Standard mode</strong></td><td>Pro mode</td><td>One file vs <strong>several documents reasoned about together</strong>, with an external knowledge base</td></tr>
+        <tr><td><strong>Azure Language</strong></td><td>Generative prompting</td><td>Deterministic, scored, cheap, containerisable vs flexible and bespoke</td></tr>
+        <tr><td><strong>Sentiment analysis</strong></td><td>Content Safety</td><td>How people feel vs whether content is harmful — never interchangeable</td></tr>
+        <tr><td><strong>Custom speech</strong></td><td>Custom neural voice</td><td>How it <strong>hears</strong> you vs how it <strong>sounds</strong></td></tr>
+        <tr><td><strong>Azure Translator</strong></td><td>LLM translation</td><td>Volume, documents, glossaries, predictable cost vs context, tone and combined tasks</td></tr>
+        <tr><td><strong>Voice Live</strong></td><td>STT → model → TTS</td><td>Low latency and <strong>built-in barge-in</strong> vs component-level control</td></tr>
+        <tr><td><strong>Embedding skill</strong></td><td>Vectorizer</td><td>Indexing time (skillset) vs query time (index). <strong>Same model for both</strong></td></tr>
+        <tr><td><strong>Global Standard</strong></td><td>Data Zone Standard</td><td>Processed anywhere vs only within US, EU or APAC</td></tr>
+        <tr><td><strong>Standard</strong></td><td>Provisioned</td><td>Pay per token, variable latency vs reserved <strong>PTUs</strong>, predictable latency</td></tr>
+        <tr><td><strong>Sora</strong></td><td>Content Understanding video</td><td><strong>Creates</strong> video vs <strong>analyses</strong> it</td></tr>
+        <tr><td><strong>Groundedness</strong></td><td>Relevance</td><td>Supported by the sources vs actually answers the question</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ================================================================= -->
+  <h2 id="trees">Master decision trees</h2>
+
+  <h3 id="tree-grounding">Where should the agent get its knowledge?</h3>
+  <Mermaid code={groundingTree} caption="Grounding source selection — one of the two or three highest-frequency decisions on the exam." />
+
+  <h3 id="tree-extraction">How should documents be extracted?</h3>
+  <Mermaid code={modeTree} caption="Standard vs pro mode vs Document Intelligence." />
+
+  <!-- ================================================================= -->
+  <h2 id="traps">The highest-yield caveats</h2>
+
+  <Callout type="exam" title="Identity and permissions">
+    <ul style="margin-bottom:0">
+      <li>Azure <strong>Owner and Contributor grant no data-plane access</strong>. A subscription Owner still cannot build in a project.</li>
+      <li>Developer least privilege = <strong>Foundry User</strong>. Something that only calls an agent = <strong>Foundry Agent Consumer</strong>.</li>
+      <li><strong>Publishing</strong> an agent needs <strong>Foundry Project Manager</strong> or above.</li>
+      <li><strong>Fine-tuning needs both planes</strong>: only <strong>Foundry Owner</strong> has both, or combine Foundry User + Foundry Account Owner.</li>
+      <li>Creating a project in the <strong>portal</strong> auto-assigns Foundry User to you and the project identity — <strong>SDK and CLI do not</strong>.</li>
+      <li>A connection existing is not authorisation: the <strong>managed identity needs a role on the target resource</strong>.</li>
+      <li>Azure AI Search over a <strong>private network</strong> requires managed identity — <strong>keys are not supported</strong>.</li>
+    </ul>
+  </Callout>
+
+  <Callout type="exam" title="Quota, limits and cost">
+    <ul style="margin-bottom:0">
+      <li>Quota is <strong>per subscription, per region, per model, per deployment type</strong>, in <strong>TPM</strong>.</li>
+      <li>TPM is estimated from <strong>prompt + <code>max_tokens</code></strong> when the request arrives — not from billed tokens. An inflated <code>max_tokens</code> causes needless 429s.</li>
+      <li><strong>429</strong> = rate limit, capacity throttling, or a temporary protective reduction (check <code>x-ratelimit-limit-tokens</code>). <strong>403</strong> = AI Gateway total token quota exhausted.</li>
+      <li><strong>Dynamic quota</strong> can only raise the effective limit, never lower it.</li>
+      <li>Global Standard gets <strong>new models first</strong> and the highest default quota; geography-based types arrive last.</li>
+      <li>Global/Data Zone <strong>Standard</strong> deployments are affected by a primary-region outage — global routing is <strong>not</strong> disaster recovery.</li>
+    </ul>
+  </Callout>
+
+  <Callout type="exam" title="Guardrails and responsible AI">
+    <ul style="margin-bottom:0">
+      <li>Severity is inverted from intuition: <strong>Low is the most restrictive</strong>, High is the most permissive.</li>
+      <li>Models can <strong>annotate</strong> or <strong>annotate and block</strong>; agents can only <strong>annotate and block</strong>.</li>
+      <li>An agent inherits its <strong>model deployment's</strong> guardrail unless one is assigned to it; an agent guardrail <strong>fully overrides</strong> the model's.</li>
+      <li><strong>Tool call</strong> and <strong>tool response</strong> intervention points exist for <strong>agents only</strong>, in preview.</li>
+      <li><strong>Spotlighting</strong> and <strong>groundedness</strong> controls are <strong>models only</strong> — not agents.</li>
+      <li>Guardrails do <strong>not</strong> apply to <strong>audio transcription models</strong>.</li>
+      <li>Turning filters off requires <strong>Limited Access approval</strong> for modified guardrails.</li>
+      <li>Playground evaluations are <strong>on by default and billed</strong>.</li>
+    </ul>
+  </Callout>
+
+  <Callout type="exam" title="Retrieval and search">
+    <ul style="margin-bottom:0">
+      <li><strong>Filters and semantic ranking are text-only</strong> — they do not apply to vectors.</li>
+      <li><strong>RRF</strong> merges parallel ranked lists by inverse rank; hybrid scores are uniformly smaller than single-query scores.</li>
+      <li>Semantic ranker = <strong>L2 rerank + captions and answers + optional query rewrite</strong>.</li>
+      <li><strong>Hybrid + semantic ranking</strong> is the benchmarked best configuration for grounding relevance.</li>
+      <li>Azure OpenAI embeddings use <strong>cosine</strong> similarity.</li>
+      <li><code>vectorFilterMode</code> chooses pre- or post-filtering around the vector search.</li>
+      <li>Indexer stages: <strong>cracking → field mappings → skillset → output field mappings → index</strong>.</li>
+      <li><strong>Knowledge store</strong> is for <em>non-search</em> consumption; <strong>enrichment caching</strong> saves re-running expensive OCR.</li>
+    </ul>
+  </Callout>
+
+  <Callout type="exam" title="Vision, text and speech">
+    <ul style="margin-bottom:0">
+      <li>Inpainting needs a <strong>same-size mask with an alpha channel</strong>; transparent pixels are what changes.</li>
+      <li>No mask means the <strong>whole image</strong> is reinterpreted.</li>
+      <li>Video generation is <strong>asynchronous</strong> — submit, poll, download.</li>
+      <li>Content Understanding <strong>Extract is documents-only</strong>; Classify and Generate work across modalities.</li>
+      <li>Video segmentation <strong>consumes tokens even when you define no fields</strong>, and video supports <strong>one</strong> <code>contentCategories</code> object.</li>
+      <li>Classification requires an <strong><code>other</code></strong> category, or everything is forced into your list. Document classification is <strong>page-level</strong>.</li>
+      <li>Good alt text states <strong>purpose</strong>, is short, never begins "image of", and is <strong>empty for decorative images</strong>.</li>
+      <li>Custom neural voice, personal voice and custom avatar are <strong>Limited Access</strong>; personal voice output is <strong>watermarked</strong>.</li>
+      <li>Custom sentiment, custom text analytics for health and custom summarisation were <strong>retired in January 2025</strong>.</li>
+      <li>Text embedded in an image is an <strong>indirect prompt injection (XPIA)</strong> vector.</li>
+    </ul>
+  </Callout>
+
+  <!-- ================================================================= -->
+  <h2 id="lookup">Scenario → answer lookup</h2>
+
+  <div class="table-wrap">
+    <table class="tbl t-amber">
+      <thead><tr><th>The scenario says…</th><th>The answer is…</th></tr></thead>
+      <tbody>
+        <tr><td>"A single boundary for RBAC and networking across all AI workloads"</td><td>One <strong>Foundry resource</strong>, multiple projects</td></tr>
+        <tr><td>"We need to deploy a Hugging Face model"</td><td><strong>Managed compute</strong> — which needs a <strong>hub</strong></td></tr>
+        <tr><td>"Prompts must stay inside the EU"</td><td><strong>Data Zone</strong> deployment type</td></tr>
+        <tr><td>"Latency spikes under sustained load"</td><td><strong>Provisioned throughput (PTUs)</strong></td></tr>
+        <tr><td>"Classify 2 million documents overnight, cost matters"</td><td><strong>Batch</strong> deployment type</td></tr>
+        <tr><td>"The Contributor cannot create an agent"</td><td>Assign <strong>Foundry User</strong></td></tr>
+        <tr><td>"A service principal should only invoke the agent"</td><td><strong>Foundry Agent Consumer</strong></td></tr>
+        <tr><td>"The agent invents policies that do not exist"</td><td>Ground it, instruct it to refuse when unsupported, measure with <strong>groundedness</strong></td></tr>
+        <tr><td>"The answer is true but off-topic"</td><td><strong>Relevance</strong> evaluator</td></tr>
+        <tr><td>"The agent keeps choosing the wrong tool"</td><td>Better <strong>tool names, descriptions and schemas</strong>; <strong>tool search</strong> at scale</td></tr>
+        <tr><td>"Dozens of tools are blowing up the context window"</td><td><strong>Tool search</strong> in a toolbox</td></tr>
+        <tr><td>"Update tools without redeploying every agent"</td><td><strong>Toolbox versioning</strong></td></tr>
+        <tr><td>"Refunds must be approved by a person"</td><td><strong>Approval-required tool</strong> (+ <strong>checkpointing</strong> if the wait is long)</td></tr>
+        <tr><td>"Route the customer to a specialist who takes over the case"</td><td><strong>Handoff</strong> orchestration</td></tr>
+        <tr><td>"Ask a specialist for one sub-answer and carry on"</td><td><strong>Agent-as-tool</strong></td></tr>
+        <tr><td>"Independent reviews of the same document, in parallel"</td><td><strong>Concurrent</strong> orchestration</td></tr>
+        <tr><td>"A fixed, auditable sequence of stages"</td><td><strong>Sequential</strong> orchestration</td></tr>
+        <tr><td>"Trigger the agent when an invoice arrives, and wait for a manager"</td><td><strong>Azure Logic Apps</strong> + Foundry agent</td></tr>
+        <tr><td>"Answers must cite the source document"</td><td><strong>Azure AI Search tool</strong> (inline citations) or file search</td></tr>
+        <tr><td>"Users must only see documents they are allowed to see"</td><td><strong>Azure AI Search</strong> with security filters / <strong>Foundry IQ</strong> permission-aware knowledge</td></tr>
+        <tr><td>"Recall the user's preferences next month"</td><td>Semantic <strong>memory</strong>, not conversation state</td></tr>
+        <tr><td>"Conversation history across a session"</td><td><strong>Conversation</strong> object (or <code>previous_response_id</code>)</td></tr>
+        <tr><td>"We must own the conversation store for compliance"</td><td><strong>Bring your own Azure Cosmos DB</strong></td></tr>
+        <tr><td>"Validate an invoice against a PO and a contract"</td><td>Content Understanding <strong>pro mode</strong></td></tr>
+        <tr><td>"Extract 12 fields with a confidence score each"</td><td><strong>Content Understanding</strong> with <code>estimateFieldSourceAndConfidence</code></td></tr>
+        <tr><td>"Charts in the PDF are invisible to search"</td><td><code>enableFigureDescription</code> / figure analysis</td></tr>
+        <tr><td>"One PDF contains several different documents"</td><td>Classification + <strong>segmentation</strong> (<code>enableSegment</code>)</td></tr>
+        <tr><td>"Redact personal data before storage, on-premises"</td><td><strong>Azure Language PII container</strong></td></tr>
+        <tr><td>"Tell me the aspect the complaint is about"</td><td><strong>Opinion mining</strong></td></tr>
+        <tr><td>"Detect abusive posts in a forum"</td><td><strong>Content Safety</strong>, not sentiment analysis</td></tr>
+        <tr><td>"The assistant mis-hears our product names"</td><td><strong>Custom speech</strong></td></tr>
+        <tr><td>"It must sound like our brand voice"</td><td><strong>Custom neural voice</strong> (Limited Access)</td></tr>
+        <tr><td>"Users must be able to interrupt the assistant"</td><td><strong>Voice Live API</strong></td></tr>
+        <tr><td>"Transcribe an archive of recordings"</td><td><strong>Batch transcription</strong></td></tr>
+        <tr><td>"Change only the sofa in the photo"</td><td><strong>Mask-based inpainting</strong></td></tr>
+        <tr><td>"Find the brand mentions in this footage"</td><td><strong>Content Understanding video</strong> — not Sora</td></tr>
+        <tr><td>"Hidden text in an uploaded image told the agent to exfiltrate data"</td><td><strong>Indirect attack detection</strong>, spotlighting (models), tool-call guardrails, least privilege</td></tr>
+        <tr><td>"Prove which agent version produced this answer"</td><td><strong>Tracing</strong> + <strong>agent versioning</strong></td></tr>
+        <tr><td>"Fail the build if answer quality regresses"</td><td><strong>Evaluation as a CI gate</strong></td></tr>
+        <tr><td>"Quality has slowly degraded in production"</td><td><strong>Scheduled evaluation</strong> against a fixed dataset (drift detection)</td></tr>
+        <tr><td>"Probe for jailbreaks before release"</td><td><strong>AI red teaming agent</strong> (PyRIT)</td></tr>
+        <tr><td>"Cut cost without losing quality"</td><td><strong>Model routing</strong> — SLM first, escalate the hard cases</td></tr>
+        <tr><td>"Eligibility must be decided by policy, not the model"</td><td><strong>Hybrid: rules engine decides, model explains</strong></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ================================================================= -->
+  <h2 id="formats">Question formats and tactics</h2>
+
+  <div class="table-wrap">
+    <table class="tbl t-slate">
+      <thead><tr><th>Format</th><th>Tactic</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Multiple choice / multiple response</strong></td><td>Read the constraint sentence first ("must not leave the EU", "least privilege", "minimise cost"). It usually eliminates two options before you evaluate anything</td></tr>
+        <tr><td><strong>Drag-and-drop ordering / build list</strong></td><td>Anchor the first and last steps, then fill the middle. Remember canonical orders: indexer stages; the agent loop; the RAG ingestion flow</td></tr>
+        <tr><td><strong>Hotspot / dropdown</strong></td><td>Each dropdown is scored independently — never leave one blank</td></tr>
+        <tr><td><strong>Yes/No statement sets</strong></td><td>Judge each statement in isolation. Statements are often three variants of one idea with one boundary changed</td></tr>
+        <tr><td><strong>Code snippets</strong></td><td>Identify the client and API surface first (classic vs current), then look for the missing loop, the missing <code>call_id</code>, the wrong endpoint or a key where keyless is required</td></tr>
+        <tr><td><strong>Case studies</strong></td><td>Read the requirements section before the narrative, and treat non-functional requirements — residency, latency, cost, least privilege — as the real question</td></tr>
+        <tr><td><strong>Repeated-scenario sets</strong></td><td>Where several questions share a scenario with different proposed solutions, more than one can be correct. Judge each on its own</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <Callout type="tip" title="Four habits that convert knowledge into marks">
+    <ol style="margin-bottom:0">
+      <li><strong>Find the constraint.</strong> Almost every scenario carries one word that decides it: <em>least privilege</em>, <em>residency</em>, <em>on-premises</em>, <em>lowest cost</em>, <em>minimal latency</em>, <em>no code</em>, <em>existing index</em>.</li>
+      <li><strong>Prefer the managed, purpose-built service</strong> over hand-rolled alternatives — unless the scenario explicitly rules it out.</li>
+      <li><strong>Prefer keyless and least privilege</strong> in any security question. It is the recommended pattern and it is almost always the intended answer.</li>
+      <li><strong>Beware the deprecated option.</strong> Classic agents, threads and runs, and hub-only paths are frequently offered and frequently wrong for new work.</li>
+    </ol>
+  </Callout>
+
+  <!-- ================================================================= -->
+  <h2 id="preview">Preview versus GA</h2>
+  <p>
+    Most questions cover generally available features, but commonly used preview features do appear. A great deal of
+    Foundry is still in preview, so it is worth knowing which side of the line things sit on. Treat this as a snapshot —
+    <strong>verify before exam day</strong>, because items move to GA regularly.
+  </p>
+  <div class="table-wrap">
+    <table class="tbl t-slate">
+      <thead><tr><th>Preview at the time of writing</th><th>Generally available</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>
+            Agent guardrails and the tool call / tool response intervention points · spotlighting · groundedness control ·
+            PII control · task adherence · workflows · tool search · skills · agent optimizer · network egress controls ·
+            Content Understanding pro mode and agentic mode · instant access models · dynamic quota · Azure Vision
+            multimodal embeddings skill and vectorizer · enrichment caching · MAI voices · Azure Language MCP server
+          </td>
+          <td>
+            Foundry resource and projects · Foundry Agent Service with prompt and hosted agents · Responses API and
+            conversations · toolboxes · model guardrails · evaluations and tracing · Azure AI Search vector, hybrid and
+            semantic search · integrated vectorization · Content Understanding standard mode · Azure Language core
+            capabilities · Speech STT/TTS, custom speech, speech translation · A2A protocol v1.0
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ================================================================= -->
+  <h2 id="checklist">Pre-exam checklist</h2>
+
+  <h3 id="two-weeks">Two weeks out</h3>
+  <ul>
+    <li>Build one RAG agent end to end in a real project: deploy a model, create an index, attach the tool, ask a question, read the citation.</li>
+    <li>Add one function tool to it and watch the call loop in the trace view.</li>
+    <li>Run one evaluation with groundedness and relevance, and read the results in the portal.</li>
+    <li>Open the guardrail configuration and look at every risk, intervention point and action.</li>
+    <li>Create a deployment with the CLI so the SKU names stop being abstract.</li>
+  </ul>
+
+  <h3 id="final-week">Final week</h3>
+  <ul>
+    <li>Drill the <a href="#lookup">scenario lookup table</a> until you answer before reading the second column.</li>
+    <li>Re-read the <a href="#rename">rebrand table</a> and the <a href="#confusions">confused pairs</a> — the cheapest marks on the exam.</li>
+    <li>Re-read the <a href={href('foundry-foundations')}>Foundations</a> RBAC and deployment-type tables.</li>
+    <li>Skim the <a href={href('sdk-deep-dive')}>SDK deep dive</a> and make sure you can spot classic vs current code in three seconds.</li>
+    <li>Take the official practice assessment on the certification page and diagnose <em>why</em> each miss happened — wrong fact, wrong boundary, or misread constraint.</li>
+  </ul>
+
+  <h3 id="night-before">The night before</h3>
+  <ul>
+    <li>Read the <a href="#numbers">numbers</a> and the five <a href="#traps">caveat callouts</a>. Nothing new.</li>
+    <li>Check the <a
+        href="https://learn.microsoft.com/en-us/credentials/certifications/resources/study-guides/ai-103"
+        target="_blank"
+        rel="noopener">official study guide</a
+      > for a change notice — the outline is revised periodically, and these notes target <strong>{SITE.skillsMeasured}</strong>.
+    </li>
+    <li>Confirm your exam logistics: ID, check-in window, workspace rules for online proctoring.</li>
+    <li>Sleep. Ten more facts are worth less than being able to read a case study carefully.</li>
+  </ul>
+
+  <Callout type="warn" title="Final reminder">
+    <p>
+      These notes are an independent study aid, not a practice exam and not a substitute for the official documentation.
+      Foundry changes weekly and Microsoft renames features often. If any detail here conflicts with
+      <a href="https://learn.microsoft.com/en-us/azure/foundry/" target="_blank" rel="noopener">Microsoft Learn</a>,
+      Microsoft Learn is right — and a
+      <a href={SITE.repo} target="_blank" rel="noopener">pull request</a> fixing it here is very welcome.
+    </p>
+  </Callout>
+</NoteLayout>
