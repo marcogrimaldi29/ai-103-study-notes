@@ -58,6 +58,9 @@
   --sidebar-w: 262px;
   --sidebar-w-collapsed: 56px;
   --aside-w: 232px;
+  /* Inset of the navigation drawer from the viewport edges, which is what lets
+     its rounded corners read as the same card as the docked rail. */
+  --drawer-gap: 12px;
 
   --font: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
   --mono: "Cascadia Code", "Cascadia Mono", Consolas, "SF Mono", Menlo, monospace;
@@ -167,20 +170,6 @@ img { max-width: 100%; }
 .brand:hover { text-decoration: none; }
 .brand .brand-full { color: var(--foundry-violet); }
 
-/* The left margin keeps the first tab's active pill from touching the wordmark
-   at the widths where the nav is at its most cramped (roughly 1150–1300px). */
-.top-nav { display: flex; gap: 3px; margin-left: 12px; }
-.top-nav a {
-  color: var(--text-soft); font-weight: 600; font-size: .875rem;
-  padding: 7px 11px; border-radius: 8px; white-space: nowrap;
-  transition: background .18s var(--ease), color .18s var(--ease);
-}
-.top-nav a:hover { background: var(--surface-3); color: var(--text); text-decoration: none; }
-.top-nav a[aria-current="page"] {
-  color: var(--foundry-violet);
-  background: color-mix(in srgb, var(--foundry-violet) 13%, transparent);
-}
-
 .header-tools { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 
 .icon-btn {
@@ -210,7 +199,109 @@ img { max-width: 100%; }
 }
 .ghub-link svg { width: 16px; height: 16px; flex: none; }
 
-.nav-toggle, .sidebar-open { display: none; }
+/* Shown only once the rail turns into a drawer. */
+.sidebar-open { display: none; }
+
+/* ===================== Search ===================== */
+.search-btn svg { width: 16px; height: 16px; }
+
+.search-modal {
+  width: min(640px, calc(100vw - 32px));
+  max-height: min(70vh, 620px);
+  margin: 0 auto;
+  margin-top: clamp(40px, 10vh, 110px);
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+.search-modal::backdrop {
+  background: rgba(8, 11, 18, .55);
+  backdrop-filter: blur(3px);
+}
+.search-modal[open] { animation: sm-in .18s var(--ease); }
+@keyframes sm-in {
+  from { opacity: 0; transform: translateY(-8px) scale(.98); }
+  to   { opacity: 1; transform: none; }
+}
+
+.sm-inner { display: flex; flex-direction: column; max-height: inherit; }
+
+.sm-field {
+  display: flex; align-items: center; gap: 10px;
+  padding: 14px 16px; border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.sm-icon { width: 17px; height: 17px; flex: none; color: var(--text-muted); }
+.sm-input {
+  flex: 1; min-width: 0; border: 0; background: none; outline: none;
+  font: inherit; font-size: 1rem; color: var(--text);
+}
+.sm-input::placeholder { color: var(--text-muted); }
+.sm-input::-webkit-search-cancel-button { display: none; }
+.sm-close {
+  flex: none; font: inherit; font-size: .68rem; font-weight: 700; letter-spacing: .06em;
+  color: var(--text-muted); background: var(--surface-3);
+  border: 1px solid var(--border); border-radius: 6px; padding: 3px 8px; cursor: pointer;
+  transition: background .18s var(--ease), color .18s var(--ease);
+}
+.sm-close:hover { background: var(--surface); color: var(--text); }
+
+.sm-status {
+  margin: 0; padding: 9px 16px 0;
+  font-size: .72rem; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.sm-results {
+  list-style: none; margin: 0; padding: 8px;
+  overflow-y: auto; scrollbar-width: thin; flex: 1;
+}
+.sm-hit + .sm-hit { margin-top: 2px; }
+.sm-hit a {
+  display: block; padding: 10px 12px; border-radius: var(--radius-sm);
+  border-left: 3px solid transparent; color: var(--text);
+  transition: background .15s var(--ease), border-color .15s var(--ease);
+}
+.sm-hit a:hover { text-decoration: none; background: var(--surface-3); }
+.sm-hit.active a {
+  background: color-mix(in srgb, var(--accent, var(--foundry-violet)) 12%, var(--surface));
+  border-left-color: var(--accent, var(--foundry-violet));
+}
+.sm-crumb {
+  display: block; font-size: .68rem; font-weight: 800;
+  letter-spacing: .07em; text-transform: uppercase;
+  color: var(--accent, var(--foundry-violet)); margin-bottom: 3px;
+}
+.sm-title { display: block; font-weight: 650; font-size: .95rem; line-height: 1.35; }
+.sm-snippet {
+  display: block; margin-top: 3px; font-size: .82rem; line-height: 1.5;
+  color: var(--text-muted);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.sm-results mark {
+  background: color-mix(in srgb, var(--ms-amber) 34%, transparent);
+  color: inherit; border-radius: 3px; padding: 0 1px; font-weight: 650;
+}
+
+.sm-foot {
+  display: flex; gap: 16px; flex-wrap: wrap;
+  padding: 9px 16px; border-top: 1px solid var(--border);
+  background: var(--surface-2); font-size: .74rem; color: var(--text-muted);
+}
+.sm-foot kbd {
+  font-family: var(--mono); font-size: .72em; padding: 2px 5px; margin-right: 3px;
+  border: 1px solid var(--border-strong); border-bottom-width: 2px;
+  border-radius: 4px; background: var(--surface); color: var(--text-soft);
+}
+
+@media (max-width: 560px) {
+  .search-modal { margin-top: 12px; max-height: calc(100vh - 24px); }
+  .sm-foot { display: none; }
+}
 
 /* ===================== Theme toggle (sunrise to sun) ===================== */
 /* The mark is the site's sunrise logo: a half disc on the horizon with three
@@ -279,6 +370,10 @@ html[data-theme="light"] .theme-toggle .sun-icon .horizon { opacity: 0; }
   gap: 0 34px;
   min-width: 0;
 }
+/* The home page reuses the rail and the same column, but flows as a block: it
+   leads with a hero rather than a page header, and carries no section outline. */
+.page-home { display: block; }
+
 .page-head { grid-area: head; }
 .on-this-page { grid-area: aside; }
 .content { grid-area: main; }
@@ -323,15 +418,19 @@ html[data-theme="light"] .theme-toggle .sun-icon .horizon { opacity: 0; }
 .sb-fold svg { width: 16px; height: 16px; transition: transform .28s var(--ease); }
 .layout[data-sidebar="collapsed"] .sb-fold svg { transform: rotate(180deg); }
 
-.sb-scroll { overflow-y: auto; padding: 10px 8px 14px; scrollbar-width: thin; }
-.sb-group + .sb-group { margin-top: 14px; }
+/* The list is sized to fit without scrolling on realistic laptop viewports —
+   a maximised window on a 1080p screen at 150% scaling is only ~620 CSS px
+   tall, where a few pixels of overflow would put up a scrollbar that shows
+   almost nothing. Scrolling stays available for genuinely short windows. */
+.sb-scroll { overflow-y: auto; padding: 8px 8px 10px; scrollbar-width: thin; }
+.sb-group + .sb-group { margin-top: 11px; }
 .sb-group-label {
   font-size: .68rem; font-weight: 700; text-transform: uppercase; letter-spacing: .1em;
-  color: var(--text-muted); padding: 6px 10px 4px;
+  color: var(--text-muted); padding: 4px 10px 3px;
 }
 .sb-link {
   display: flex; align-items: center; gap: 9px;
-  padding: 7px 10px; border-radius: 8px;
+  padding: 6px 10px; border-radius: 8px;
   font-size: .875rem; font-weight: 600; color: var(--text-soft);
   border-left: 3px solid transparent;
   transition: background .18s var(--ease), color .18s var(--ease), border-color .18s var(--ease);
@@ -819,31 +918,26 @@ ol.steps > li::before {
   .otp-list { padding-left: 14px; }
 }
 
-@media (max-width: 1150px) {
-  .top-nav {
-    position: fixed; top: var(--header-h); left: 0; right: 0;
-    flex-direction: column; background: var(--surface);
-    border-bottom: 1px solid var(--border); padding: 8px 14px;
-    transform: translateY(-150%); transition: transform .26s var(--ease);
-    box-shadow: var(--shadow-md); z-index: 99;
-  }
-  .top-nav.open { transform: translateY(0); }
-  .nav-toggle { display: inline-flex; }
-  /* Note pages already carry the full page list in the left rail — as a panel
-     here, as a drawer further down — so a second menu opening the same links
-     would be redundant. The home page has no rail and keeps its dropdown. */
-  .site-header.has-sidebar .nav-toggle,
-  .site-header.has-sidebar .top-nav { display: none; }
-}
-
 @media (max-width: 980px) {
   .layout, .layout[data-sidebar="collapsed"] { grid-template-columns: minmax(0, 1fr); gap: 0; }
   .sidebar-open { display: inline-flex; }
+  /* The drawer stays the same rounded, bordered card as the docked rail rather
+     than becoming a flush full-bleed panel, so the rail keeps its identity at
+     every width. Inset from the edges is what lets the corners actually read. */
   .sidebar {
-    position: fixed; top: 0; left: 0; bottom: 0; z-index: 140;
-    width: min(320px, 86vw); max-height: none; border-radius: 0;
-    border-width: 0 1px 0 0; box-shadow: var(--shadow-lg);
-    transform: translateX(-102%);
+    position: fixed; z-index: 140;
+    top: var(--drawer-gap); left: var(--drawer-gap); bottom: auto;
+    width: min(320px, calc(100vw - var(--drawer-gap) * 2 - 24px));
+    /* Explicit height rather than top+bottom: the rail is a grid item carrying
+       align-self: start, which otherwise shrinks it to its content. dvh also
+       keeps it correct while mobile browser chrome shows and hides. */
+    height: calc(100dvh - var(--drawer-gap) * 2);
+    max-height: none;
+    border-radius: var(--radius);
+    border-width: 1px;
+    box-shadow: var(--shadow-lg);
+    /* Clear the left inset as well as its own width, so no corner peeks out. */
+    transform: translateX(calc(-100% - var(--drawer-gap) - 4px));
     /* visibility keeps the closed drawer out of the tab order, so Tab never
        lands on an off-screen link and scrolls the page sideways. */
     visibility: hidden;

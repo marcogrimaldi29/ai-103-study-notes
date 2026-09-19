@@ -30,11 +30,14 @@ export type PageGroup = 'start' | 'skills' | 'extras';
 export interface NotePage {
   /** URL segment; '' is the home page. */
   slug: string;
-  /** Full label used in the sidebar and footer. */
+  /** Full label, used in the footer, the pager and search results. */
   label: string;
-  /** Condensed label for the top navigation bar. */
+  /**
+   * Condensed label for the sidebar. Carries no skill number: the rail badge
+   * beside it already shows that, so repeating it reads as a duplicate.
+   */
   navLabel: string;
-  /** Compact marker shown in the collapsed sidebar rail. */
+  /** Compact marker shown beside the label, and alone in the collapsed rail. */
   rail: string;
   /** Eyebrow shown on cards and page headers. */
   badge: string;
@@ -74,7 +77,7 @@ export const PAGES: NotePage[] = [
   {
     slug: 'skill-1-plan-manage',
     label: 'Plan and manage an Azure AI solution',
-    navLabel: '1 · Plan & Manage',
+    navLabel: 'Plan & Manage',
     rail: '1',
     badge: 'Skill 1 · 25–30%',
     accent: 'var(--s1)',
@@ -87,7 +90,7 @@ export const PAGES: NotePage[] = [
   {
     slug: 'skill-2-generative-ai-agents',
     label: 'Implement generative AI and agentic solutions',
-    navLabel: '2 · GenAI & Agents',
+    navLabel: 'GenAI & Agents',
     rail: '2',
     badge: 'Skill 2 · 30–35%',
     accent: 'var(--s2)',
@@ -100,7 +103,7 @@ export const PAGES: NotePage[] = [
   {
     slug: 'skill-3-computer-vision',
     label: 'Implement computer vision solutions',
-    navLabel: '3 · Vision',
+    navLabel: 'Vision',
     rail: '3',
     badge: 'Skill 3 · 10–15%',
     accent: 'var(--s3)',
@@ -113,7 +116,7 @@ export const PAGES: NotePage[] = [
   {
     slug: 'skill-4-text-analysis',
     label: 'Implement text analysis solutions',
-    navLabel: '4 · Text & Speech',
+    navLabel: 'Text & Speech',
     rail: '4',
     badge: 'Skill 4 · 10–15%',
     accent: 'var(--s4)',
@@ -126,7 +129,7 @@ export const PAGES: NotePage[] = [
   {
     slug: 'skill-5-information-extraction',
     label: 'Implement information extraction solutions',
-    navLabel: '5 · Extraction',
+    navLabel: 'Extraction',
     rail: '5',
     badge: 'Skill 5 · 10–15%',
     accent: 'var(--s5)',

@@ -3,6 +3,7 @@ import BaseLayout from '../layouts/BaseLayout.astro';
 import Callout from '../components/Callout.astro';
 import Mermaid from '../components/Mermaid.astro';
 import NavCard from '../components/NavCard.astro';
+import Sidebar from '../components/Sidebar.astro';
 import { PAGES, SITE, SKILL_PAGES, pageBySlug } from '../data/site';
 import { absolute, href } from '../lib/urls';
 
@@ -63,8 +64,14 @@ flowchart LR
   ogType="website"
   schema={schema}
 >
-  <main class="page-wide" id="main">
-    <section class="hero">
+  <div class="layout" data-sidebar="expanded" data-drawer="closed">
+    <Sidebar current="" />
+
+    {/* The home page shares the note pages' rail so navigation never changes
+        shape between them, but keeps a plain block flow: it has a hero rather
+        than a page header, and no section outline. */}
+    <main class="page page-home" id="main">
+      <section class="hero">
       <span class="eyebrow">Microsoft Certification · Exam {SITE.exam}</span>
       <h1>Azure AI Apps and Agents Developer</h1>
       <p>
@@ -115,7 +122,7 @@ flowchart LR
       </p>
     </Callout>
 
-    <h2 style="margin-bottom:6px">The platform in one picture</h2>
+    <h2 id="the-platform-in-one-picture" style="margin-bottom:6px">The platform in one picture</h2>
     <p class="lead" style="margin-top:0">
       Almost every AI-103 question lives somewhere on this diagram. If you can place a service on it, you can usually
       eliminate two of the four answers.
@@ -125,7 +132,7 @@ flowchart LR
       caption="Microsoft Foundry: one Azure resource holding projects, models, agents, tools and knowledge, wrapped in a single governance and observability plane."
     />
 
-    <h2 style="margin-bottom:6px">Skills measured at a glance</h2>
+    <h2 id="skills-measured-at-a-glance" style="margin-bottom:6px">Skills measured at a glance</h2>
     <p class="lead" style="margin-top:0">
       The weighting is <strong>not</strong> even. Skills 1 and 2 together are roughly
       <strong>55–65% of the exam</strong> — budget your study time accordingly, and do not let the three 10–15% areas
@@ -150,13 +157,13 @@ flowchart LR
       </div>
     </div>
 
-    <h2 style="margin-bottom:6px">Suggested study order</h2>
+    <h2 id="suggested-study-order" style="margin-bottom:6px">Suggested study order</h2>
     <Mermaid
       code={journey}
       caption="Foundations first, then the two heavyweight skills, then the three focused areas — which all reuse the same Foundry primitives."
     />
 
-    <h2 style="margin-bottom:6px">Study pages</h2>
+    <h2 id="study-pages" style="margin-bottom:6px">Study pages</h2>
     <div class="card-grid">
       {
         cards.map((p) => (
@@ -173,7 +180,7 @@ flowchart LR
       }
     </div>
 
-    <h2 style="margin-bottom:6px">Before you book</h2>
+    <h2 id="before-you-book" style="margin-bottom:6px">Before you book</h2>
     <div class="stat-grid">
       <div class="stat" style="--accent:var(--s1)">
         <div class="s-num">700</div>
@@ -223,7 +230,8 @@ flowchart LR
       </p>
     </Callout>
     </div>
-  </main>
+    </main>
+  </div>
 
   <script>
     // Fill the weighting bars when they scroll into view.

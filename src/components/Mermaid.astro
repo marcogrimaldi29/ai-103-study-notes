@@ -81,6 +81,10 @@ const { code, caption } = Astro.props;
       } catch (err) {
         console.warn('Mermaid render failed', err);
       }
+
+      // Rendering changes the page height by tens of thousands of pixels, which
+      // invalidates any anchor scroll the browser already performed.
+      window.dispatchEvent(new CustomEvent('ai103:diagramsrendered'));
     }
 
     render();

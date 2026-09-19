@@ -2,6 +2,7 @@
 import { SITE } from '../data/site';
 import { absolute, asset } from '../lib/urls';
 import Analytics from '../components/Analytics.astro';
+import AnchorFix from '../components/AnchorFix.astro';
 import FloatingButtons from '../components/FloatingButtons.astro';
 import Footer from '../components/Footer.astro';
 import Header from '../components/Header.astro';
@@ -16,22 +17,12 @@ interface Props {
   accent?: string;
   /** Hex used for the browser theme-color meta. */
   themeColor?: string;
-  /** Note pages render the foldable sidebar; the home page does not. */
-  hasSidebar?: boolean;
   ogType?: 'website' | 'article';
   /** Extra structured data merged into the JSON-LD graph. */
   schema?: Record<string, unknown>[];
 }
 
-const {
-  title,
-  description,
-  slug,
-  themeColor = '#6e4fe0',
-  hasSidebar = false,
-  ogType = 'article',
-  schema = [],
-} = Astro.props;
+const { title, description, slug, themeColor = '#6e4fe0', ogType = 'article', schema = [] } = Astro.props;
 
 const canonical = absolute(SITE.origin, slug);
 const ogImage = `${SITE.origin}${asset('images/site-mark-no-bg.png')}`;
@@ -111,9 +102,10 @@ const graph = [
 
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
-    <Header current={slug} hasSidebar={hasSidebar} />
+    <Header />
     <slot />
     <Footer />
     <FloatingButtons isHome={isHome} />
+    <AnchorFix />
   </body>
 </html>

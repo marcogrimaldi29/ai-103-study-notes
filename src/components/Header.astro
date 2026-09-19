@@ -1,39 +1,29 @@
 ---
-import { PAGES, SITE } from '../data/site';
+import { SITE } from '../data/site';
 import { asset, href } from '../lib/urls';
+import Search from './Search.astro';
 import ThemeToggle from './ThemeToggle.astro';
 
-interface Props {
-  /** Slug of the page being rendered, so the matching tab is marked current. */
-  current: string;
-  /** Note pages render a sidebar, so they also get the drawer button. */
-  hasSidebar?: boolean;
-}
-
-const { current, hasSidebar = false } = Astro.props;
+/**
+ * Top bar: the drawer control, the wordmark, and the tools.
+ *
+ * Page navigation lives entirely in the left rail (docked on wide screens, a
+ * drawer below 980px), so there is no tab strip or dropdown here to duplicate
+ * it and no second menu control to keep in step with it.
+ */
 ---
 
-<header class:list={['site-header', { 'has-sidebar': hasSidebar }]}>
-  {
-    hasSidebar && (
-      <button
-        type="button"
-        class="icon-btn sidebar-open"
-        id="sidebar-open"
-        aria-label="Open navigation"
-        aria-controls="sidebar"
-        aria-expanded="false"
-      >
-        <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true">
-          <path d="M1.5 3h13a.5.5 0 0 1 0 1h-13a.5.5 0 0 1 0-1Zm0 4.5h13a.5.5 0 0 1 0 1h-13a.5.5 0 0 1 0-1ZM1.5 12h13a.5.5 0 0 1 0 1h-13a.5.5 0 0 1 0-1Z" />
-        </svg>
-      </button>
-    )
-  }
-
-  <!-- The menu button always sits to the left of the wordmark, on every page,
-       so the header's leading control never moves between pages. -->
-  <button type="button" class="icon-btn nav-toggle" id="nav-toggle" aria-label="Menu" aria-controls="top-nav" aria-expanded="false">
+<header class="site-header">
+  <!-- Drawer control. Hidden by CSS while the rail is docked, and always to the
+       left of the wordmark so the header's leading control never moves. -->
+  <button
+    type="button"
+    class="icon-btn sidebar-open"
+    id="sidebar-open"
+    aria-label="Open navigation"
+    aria-controls="sidebar"
+    aria-expanded="false"
+  >
     <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true">
       <path d="M1.5 3h13a.5.5 0 0 1 0 1h-13a.5.5 0 0 1 0-1Zm0 4.5h13a.5.5 0 0 1 0 1h-13a.5.5 0 0 1 0-1ZM1.5 12h13a.5.5 0 0 1 0 1h-13a.5.5 0 0 1 0-1Z" />
     </svg>
@@ -44,17 +34,8 @@ const { current, hasSidebar = false } = Astro.props;
     <span><span class="brand-full">AI-103 </span>Study Notes</span>
   </a>
 
-  <nav class="top-nav" id="top-nav" aria-label="Main">
-    {
-      PAGES.map((p) => (
-        <a href={href(p.slug)} aria-current={p.slug === current ? 'page' : undefined}>
-          {p.navLabel}
-        </a>
-      ))
-    }
-  </nav>
-
   <div class="header-tools">
+    <Search />
     <a class="ghub-link" href={SITE.repo} target="_blank" rel="noopener" title="Star this repository on GitHub">
       ⭐ <span>on</span>
       <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
@@ -67,32 +48,3 @@ const { current, hasSidebar = false } = Astro.props;
     <ThemeToggle />
   </div>
 </header>
-
-<script>
-  const toggle = document.getElementById('nav-toggle');
-  const nav = document.getElementById('top-nav');
-
-  if (toggle && nav) {
-    toggle.addEventListener('click', () => {
-      const open = nav.classList.toggle('open');
-      toggle.setAttribute('aria-expanded', String(open));
-    });
-
-    // Close the dropdown when focus or a click lands outside it.
-    document.addEventListener('click', (e) => {
-      const target = e.target as Node;
-      if (!nav.classList.contains('open')) return;
-      if (nav.contains(target) || toggle.contains(target)) return;
-      nav.classList.remove('open');
-      toggle.setAttribute('aria-expanded', 'false');
-    });
-
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && nav.classList.contains('open')) {
-        nav.classList.remove('open');
-        toggle.setAttribute('aria-expanded', 'false');
-        toggle.focus();
-      }
-    });
-  }
-</script>
