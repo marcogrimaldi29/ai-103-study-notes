@@ -1,5 +1,17 @@
 ---
 import { href } from '../lib/urls';
+import ThemeToggle from './ThemeToggle.astro';
+
+/**
+ * Floating controls.
+ *
+ * Right stack — Back to top, and Home away from the home page — appears once
+ * the reader has scrolled past the fold, since neither is useful before that.
+ *
+ * Left — the theme switcher, which stays visible at all times: it is not tied
+ * to reading position, and keeping it out of the top bar is what leaves room
+ * for the full wordmark on a phone.
+ */
 
 interface Props {
   /** The home page hides its own Home button, where it would be a no-op. */
@@ -8,6 +20,8 @@ interface Props {
 
 const { isHome = false } = Astro.props;
 ---
+
+<ThemeToggle />
 
 {
   !isHome && (

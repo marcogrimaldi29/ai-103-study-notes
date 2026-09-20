@@ -825,6 +825,16 @@ ol.steps > li::before {
 .float-top { bottom: 22px; }
 .float-home { bottom: 70px; }
 
+/* The theme switcher floats bottom-left rather than sitting in the top bar,
+   which is what leaves room for the full wordmark on a phone. Unlike the
+   right-hand stack it is always visible: switching theme has nothing to do
+   with how far down the page you are. */
+.float-theme {
+  position: fixed; left: 22px; bottom: 22px; z-index: 60;
+  box-shadow: var(--shadow-md);
+}
+.float-theme:hover { transform: translateY(-2px) scale(1.06); }
+
 /* ===================== Footer ===================== */
 .site-footer {
   border-top: 1px solid var(--border); background: var(--surface);
@@ -972,8 +982,27 @@ ol.steps > li::before {
   .hero p { font-size: 1rem; }
   .page-head h1 { font-size: 1.62rem; }
   .content h2 { font-size: 1.32rem; }
+  /* Tighten the bar so the full "AI-103 Study Notes" wordmark fits on a phone
+     rather than being clipped by the tools beside it. */
+  .site-header { padding: 0 14px; gap: 10px; }
+  .site-header .icon-btn { width: 34px; height: 34px; }
+  .header-tools { gap: 6px; }
+  .ghub-link { padding: 7px 10px; gap: 6px; }
   .ghub-link span { display: none; }
-  .brand .brand-full { display: none; }
+  .brand { gap: 9px; }
+  .brand img { height: 26px; }
+}
+
+/* Smallest phones still in circulation. The wordmark stays whole; everything
+   around it gives up a few more pixels instead. */
+@media (max-width: 380px) {
+  .site-header { padding: 0 8px; gap: 7px; }
+  .site-header .icon-btn { width: 32px; height: 32px; }
+  .brand { gap: 7px; font-size: .88rem; }
+  .brand img { height: 24px; }
+  .ghub-link { padding: 5px 7px; gap: 5px; }
+  .header-tools { gap: 5px; }
+  .float-theme { left: 16px; bottom: 16px; }
   .code-block .lang {
     position: static; display: block; text-align: right;
     border-radius: var(--radius-sm) var(--radius-sm) 0 0;

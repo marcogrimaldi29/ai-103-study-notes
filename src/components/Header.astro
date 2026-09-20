@@ -2,14 +2,17 @@
 import { SITE } from '../data/site';
 import { asset, href } from '../lib/urls';
 import Search from './Search.astro';
-import ThemeToggle from './ThemeToggle.astro';
 
 /**
- * Top bar: the drawer control, the wordmark, and the tools.
+ * Top bar: the drawer control, the wordmark, search and the repo link.
  *
  * Page navigation lives entirely in the left rail (docked on wide screens, a
  * drawer below 980px), so there is no tab strip or dropdown here to duplicate
  * it and no second menu control to keep in step with it.
+ *
+ * The theme switcher is deliberately not here — it floats bottom-left with the
+ * other floating controls, which keeps the bar narrow enough for the full
+ * wordmark to fit on a phone.
  */
 ---
 
@@ -45,6 +48,5 @@ import ThemeToggle from './ThemeToggle.astro';
            full phrase here instead. -->
       <span class="visually-hidden">Star this repository on GitHub</span>
     </a>
-    <ThemeToggle />
   </div>
 </header>
