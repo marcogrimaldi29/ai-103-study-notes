@@ -34,7 +34,6 @@ Every page carries Mermaid diagrams, decision tables, Python samples and exam-ca
 - **Build-time syntax highlighting** with Shiki — no highlighter ships to the browser
 - Floating **Home** and **Back to top** buttons that appear on scroll
 - Accessible by design: skip link, visible focus, semantic landmarks, reduced-motion support, print stylesheet
-- `sitemap.xml`, canonical URLs, Open Graph tags and JSON-LD structured data
 - Cookieless analytics via [Umami](https://umami.is/)
 
 ## 🗂️ Project Structure
@@ -44,26 +43,13 @@ src/
 ├── components/     Header, Footer, Sidebar, OnThisPage, ThemeToggle, Mermaid, CodeBlock, Callout…
 ├── data/site.ts    Single source of truth: site identity + page registry
 ├── layouts/        BaseLayout (head, header, footer) and NoteLayout (sidebar + content)
-├── lib/urls.ts     Base-path helpers for links, assets and canonical URLs
-├── pages/          One directory per note page, plus sitemap.xml.ts
+├── lib/urls.ts     Base-path helpers for links and assets
+├── pages/          One directory per note page
 └── styles/         global.css — the whole design system
 public/images/      Brand mark and profile image
 ```
 
-Navigation, sidebar, footer, pager and sitemap all read from the page registry in
-[`src/data/site.ts`](src/data/site.ts).
-
-## 🚀 Deployment
-
-Pushing to `main` triggers [`.github/workflows/deploy-pages.yml`](.github/workflows/deploy-pages.yml), which builds the
-site and publishes it to GitHub Pages.
-
-The workflow substitutes the `UMAMI_WEBSITE_ID` repository secret for a placeholder in the built output, so the
-analytics ID is never committed. Without the secret the placeholder survives, the guard in
-[`Analytics.astro`](src/components/Analytics.astro) matches it, and no analytics script loads at all.
-
-**Repository setup:** Settings → Pages → Source → **GitHub Actions**, and add `UMAMI_WEBSITE_ID` under
-Settings → Secrets and variables → Actions.
+Navigation, sidebar, footer and pager all read from the page registry in [`src/data/site.ts`](src/data/site.ts).
 
 ## 🧰 Built With
 
@@ -72,23 +58,16 @@ Settings → Secrets and variables → Actions.
 
 ## 🤖 A Note on AI
 
-These notes were researched and written **with the help of AI — [Claude](https://claude.com/claude-code) in this case** —
-working from the official Microsoft Learn documentation, the AI-103 study guide and the AI-103T00-A course syllabus.
-Every page was reviewed before publication, but AI-assisted writing can still get details wrong, and Microsoft Foundry
-changes quickly. Treat these notes as a study companion and verify anything decision-critical against the
-[official documentation](https://learn.microsoft.com/en-us/azure/foundry/).
+These notes were researched and written **with the help of AI — [Claude](https://claude.com/claude-code)** in this case — working from the official Microsoft Learn documentation, the AI-103 study guide and the AI-103T00-A course syllabus. Every page was reviewed before publication, but AI-assisted writing can still get details wrong, and Microsoft Foundry changes quickly. Treat these notes as a study companion and verify anything decision-critical against the [official documentation](https://learn.microsoft.com/en-us/azure/foundry/).
 
 ## 🤝 Contributing
 
-Foundry changes fast and Microsoft renames features often, so corrections are genuinely useful. Open an
-[issue](https://github.com/marcogrimaldi29/ai-103-study-notes/issues) or a pull request.
+Foundry changes fast and Microsoft renames features often, so corrections are genuinely useful. Open an [issue](https://github.com/marcogrimaldi29/ai-103-study-notes/issues) or a pull request.
 
 ## ⚠️ Disclaimer
 
 These notes are an independent study aid for **learning purposes only**. They are not affiliated with or endorsed by
-Microsoft. Always verify against the
-[official AI-103 study guide](https://learn.microsoft.com/en-us/credentials/certifications/resources/study-guides/ai-103)
-and the [Microsoft Foundry documentation](https://learn.microsoft.com/en-us/azure/foundry/) before relying on any detail
+Microsoft. Always verify against the [official AI-103 study guide](https://learn.microsoft.com/en-us/credentials/certifications/resources/study-guides/ai-103) and the [Microsoft Foundry documentation](https://learn.microsoft.com/en-us/azure/foundry/) before relying on any detail
 here.
 
 ## 👋 Let's Connect
