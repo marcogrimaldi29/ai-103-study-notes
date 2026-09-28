@@ -12,11 +12,15 @@ export default defineConfig({
     // Emit /page/index.html so every note has a clean, extensionless URL.
     format: 'directory',
   },
-  markdown: {
-    shikiConfig: {
-      themes: { light: 'github-light', dark: 'github-dark' },
-    },
-  },
+  // Astro 7 defaults this to 'jsx', which strips the whitespace between a text
+  // node and an inline element on the next source line — the way React does.
+  // These pages are hand-written prose full of <strong>, <a> and <code> at line
+  // starts, so that silently joined words together ("built around theskills
+  // measured…"). 'true' keeps HTML whitespace semantics and still minifies.
+  compressHTML: true,
+  // No `markdown` config: there are no .md/.mdx pages, and code highlighting
+  // comes from the <Code> component in src/components/CodeBlock.astro, which
+  // takes its themes directly rather than from the Markdown pipeline.
   vite: {
     optimizeDeps: {
       // Mermaid is reached only through a dynamic import() inside a client
