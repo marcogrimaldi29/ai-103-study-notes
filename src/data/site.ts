@@ -16,6 +16,7 @@ export const SITE = {
   skillsMeasured: 'April 16, 2026',
   origin: 'https://marcogrimaldi29.com',
   repo: 'https://github.com/marcogrimaldi29/ai-103-study-notes',
+  issues: 'https://github.com/marcogrimaldi29/ai-103-study-notes/issues',
   author: {
     name: 'Marco Grimaldi',
     role: 'Cloud Solution Architect',
