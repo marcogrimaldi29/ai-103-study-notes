@@ -14,5 +14,8 @@
   "dependencies": {
     "astro": "^7.3.5",
     "mermaid": "^11.6.0"
+  },
+  "overrides": {
+    "katex": "^0.18.2"
   }
 }
