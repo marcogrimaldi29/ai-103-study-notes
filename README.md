@@ -63,7 +63,8 @@ These notes were researched and written **with the help of AI — [Claude](https
 ## 🐞 Spotted a Mistake?
 
 Foundry changes fast and Microsoft renames features often, so if something here is wrong or out of date, please
-[report an issue](https://github.com/marcogrimaldi29/ai-103-study-notes/issues).
+[report an issue](https://github.com/marcogrimaldi29/ai-103-study-notes/issues). The
+[contributing guide](.github/CONTRIBUTING.md) explains what makes a report quick to fix and what's out of scope.
 
 ## ⚠️ Disclaimer
 
