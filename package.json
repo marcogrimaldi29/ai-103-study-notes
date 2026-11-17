@@ -12,7 +12,7 @@
     "astro": "astro"
   },
   "dependencies": {
-    "astro": "^7.3.5",
+    "astro": "^7.4.7",
     "mermaid": "^11.6.0"
   },
   "overrides": {
